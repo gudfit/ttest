@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lldc"
+version = "0.1.0"
+description = "LLMs as Data Compressors: reproducible research code for PM & VQ pipelines"
+authors = [{ name = "Gudfit" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "torch",
+  "transformers",
+  "accelerate",
+  "datasets",
+  "tokenizers",
+  "numpy",
+  "scipy",
+  "tqdm",
+  "rich",
+  "evaluate",
+  "bert-score",
+  "sacrebleu",
+  "python-Levenshtein",
+  "sentence-transformers",
+  "constriction",
+  "matplotlib",
+  "pandas",
+  "hydra-core",
+  "bitsandbytes; platform_system == 'Linux'",
+  "wandb>=0.21.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff", "mypy", "types-requests"]
+
+[project.scripts]
+specialise = "lldc.scripts.stage1_specialise:main"
+compress_pm = "lldc.scripts.stage2_compress_pm:main"
+compress_vq = "lldc.scripts.stage2_compress_vq:main"
+reconstruct_pm = "lldc.scripts.stage3_reconstruct_pm:main"
+reconstruct_vq = "lldc.scripts.stage3_reconstruct_vq:main"
+evaluate = "lldc.scripts.evaluate_all:main"
+sweeps = "lldc.scripts.sweeps:main"
+
+[tool.setuptools.packages.find]
+include = ["lldc*"]
+exclude = ["tests*", "data*", "configs*", "reports*", "external*", "artifacts*"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+
+[tool.coverage.run]
+branch = true
+
+[dependency-groups]
+dev = [
+    "mypy>=1.17.1",
+    "pytest>=8.4.1",
+    "ruff>=0.12.8",
+]

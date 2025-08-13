@@ -1,0 +1,28 @@
+name: the-stack
+source:
+  hf_dataset: bigcode/the-stack
+  hf_config: python
+  split_map:
+    train: train
+    valid: validation
+    test: test
+  streaming: true
+processing:
+  text_field: content
+  pack_sequences: true
+  max_length: 2048
+  drop_remainder: true
+limits:
+  max_train_samples: auto
+  max_eval_samples: auto
+tokenizer:
+  name: auto
+  truncation: true
+  padding: false
+loader:
+  batch_size: auto
+  num_workers: ${compute.num_workers}
+stats:
+  compute_unigram_entropy: true
+  compute_ngram_entropy: [8]
+  compute_mi: true

@@ -1,0 +1,33 @@
+Metadata-Version: 2.4
+Name: lldc
+Version: 0.1.0
+Summary: LLMs as Data Compressors: reproducible research code for PM & VQ pipelines
+Author: Your Name
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: torch
+Requires-Dist: transformers
+Requires-Dist: accelerate
+Requires-Dist: datasets
+Requires-Dist: tokenizers
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: tqdm
+Requires-Dist: rich
+Requires-Dist: evaluate
+Requires-Dist: bert-score
+Requires-Dist: sacrebleu
+Requires-Dist: python-Levenshtein
+Requires-Dist: sentence-transformers
+Requires-Dist: constriction
+Requires-Dist: matplotlib
+Requires-Dist: pandas
+Requires-Dist: hydra-core
+Requires-Dist: bitsandbytes; platform_system == "Linux"
+Requires-Dist: wandb>=0.21.1
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: pytest-cov; extra == "dev"
+Requires-Dist: ruff; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+Requires-Dist: types-requests; extra == "dev"

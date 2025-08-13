@@ -1,0 +1,48 @@
+name: e2a_pruning
+
+defaults:
+  - override /data: wikitext-103
+  - override /model: roberta-base
+  - override /eval:
+      - efficiency
+      - fidelity
+      - crumpled_paper
+
+model_groups:
+  mlm: [roberta-base, bert-base-cased, distilroberta-base]
+  ar: [gpt2, gpt2-medium, gpt2-large]
+
+pruning:
+  targets:
+    mlm: ${model_groups.mlm}
+    ar: ${model_groups.ar}
+  method: structured
+  schedule:
+    levels: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+    order: auto
+  structured:
+    drop_attention_heads: true
+    drop_ffn_channels: true
+    drop_layers: false
+  saliency_metric: magnitude
+
+recovery:
+  finetune_epochs: auto
+  lr: auto
+  scheduler: auto
+  warmup_ratio: auto
+
+stage2_reuse: true
+
+evaluation:
+  run_efficiency: true
+  run_fidelity: true
+  run_crumpled_paper: true
+
+replication:
+  seeds: auto
+  aggregate: mean_std
+
+outputs:
+  write_rd_curves: true
+  write_tables: true

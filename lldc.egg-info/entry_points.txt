@@ -1,0 +1,8 @@
+[console_scripts]
+compress_pm = lldc.scripts.stage2_compress_pm:main
+compress_vq = lldc.scripts.stage2_compress_vq:main
+evaluate = lldc.scripts.evaluate_all:main
+reconstruct_pm = lldc.scripts.stage3_reconstruct_pm:main
+reconstruct_vq = lldc.scripts.stage3_reconstruct_vq:main
+specialise = lldc.scripts.stage1_specialise:main
+sweeps = lldc.scripts.sweeps:main
