@@ -20,6 +20,7 @@ from lldc.baselines.kenlm_subsample import kenlm_ngram_bpc
 from lldc.eval.functional import evaluate_superglue_zero_shot
 from lldc.eval.factual_recall import evaluate_factual_recall
 from lldc.data.bootstrap import ensure_data
+from lldc.data.probes import generate_factual_probes, ProbeSpec
 
 _MASK_PAT = re.compile(r"mask(?:_|-)?(0\.\d+|1(?:\.0+)?)", re.I)
 _K_PAT = re.compile(r"(?:k|codebook|K)(?:_|-)?(\d{2,6})", re.I)
@@ -495,7 +496,7 @@ def _export_unified_rd(points_pm_vq: List[RDPoint], paths: Paths) -> None:
                 va="top",
             )
 
-        plt.xlabel("Bits per character (BPC)")
+        plt.xlabel("Bits per Character (BPC)")
         plt.ylabel("Distortion (1 - charF)")
         plt.title("Unified RD: PM, VQ, and Lossless Baselines")
         if seen_labels:
@@ -586,22 +587,20 @@ def main():
                 json.dumps({"error": str(e)}, indent=2)
             )
 
-        _export_unified_rd(rd_points_objects, paths)
-
-        methods_bpc_runtime: Dict[str, float] = {}
-        for p in rd_points_objects:
-            key = f"{p.method}"
-            methods_bpc_runtime[key] = min(
-                methods_bpc_runtime.get(key, float("inf")), p.bpc
-            )
-        base_chars = _compute_base_chars_from_payloads(paths.payloads)
-        _export_amortised_curves(
-            paths.results, methods_bpc_runtime, static["static_bits_total"], base_chars
-        )
+        _ = ensure_data(paths.root)
 
         try:
-            ds_info = ensure_data(paths.root)
-            probes_path = str(ds_info["probes"])
+            data_dir = paths.root / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            ds_name = str(cfg.data.source.hf_dataset)
+            ds_cfg = str(getattr(cfg.data.source, "hf_config", ""))
+            out_path = data_dir / f"factual_probes_{cfg.data.name}.jsonl"
+            spec = ProbeSpec(
+                out_path=out_path, n=800, dataset_name=ds_name, dataset_config=ds_cfg
+            )
+            generate_factual_probes(spec)
+            probes_path = str(out_path)
+
             model_name = cfg.model.pretrained_name
             tok = AutoTokenizer.from_pretrained(model_name)
             if tok.pad_token is None and tok.eos_token:
@@ -647,7 +646,7 @@ def main():
             )
 
         log.info(
-            "[evaluate_all] Exported static size, RD points (PM/VQ), unified RD (with baselines), aggregates, amortised curves, and new eval metrics."
+            "[evaluate_all] Exported static size, RD points (PM/VQ), unified RD (with baselines), aggregates, amortised curves, and updated factual recall (domain-specific)."
         )
 
         try:

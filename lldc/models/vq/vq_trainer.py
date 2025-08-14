@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -184,21 +184,46 @@ def encode_indices(
     return out["indices"]
 
 
+def _seq_ce_bits(lm: "IndexLM", seq: List[int]) -> float:
+    if len(seq) < 2:
+        return 0.0
+    device = next(lm.parameters()).device
+    x = torch.tensor(seq[:-1], dtype=torch.long, device=device).unsqueeze(0)
+    y = torch.tensor(seq[1:], dtype=torch.long, device=device).unsqueeze(0)
+    logits = lm(x)
+    logp = F.log_softmax(logits, dim=-1)
+    nll = -logp.gather(-1, y.unsqueeze(-1)).squeeze(-1)
+    return float((nll / torch.log(torch.tensor(2.0, device=device))).sum().item())
+
+
 def train_index_lm(
     indices: List[List[int]],
     K: int,
     hidden: int = 512,
     layers: int = 1,
     epochs: int = 2,
+    val_fraction: float = 0.1,
+    early_stop: bool = True,
+    patience: int = 3,
 ) -> IndexLM:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     lm = IndexLM(K, hidden_size=hidden, layers=layers).to(device)
     opt = torch.optim.AdamW(lm.parameters(), lr=1e-3)
-    for _ in range(epochs):
+    all_seqs = [s for s in indices if len(s) >= 2]
+    if not all_seqs:
+        lm.eval()
+        return lm
+    n_val = max(1, int(len(all_seqs) * max(0.0, min(0.5, val_fraction))))
+    val = all_seqs[:n_val]
+    train = all_seqs[n_val:] or all_seqs
+
+    best_val = float("inf")
+    worse_streak = 0
+
+    for ep in range(max(1, epochs)):
+        lm.train()
         total = 0.0
-        for seq in indices:
-            if len(seq) < 2:
-                continue
+        for seq in train:
             x = torch.tensor(seq[:-1], dtype=torch.long, device=device).unsqueeze(0)
             y = torch.tensor(seq[1:], dtype=torch.long, device=device).unsqueeze(0)
             logits = lm(x)
@@ -207,6 +232,21 @@ def train_index_lm(
             loss.backward()
             opt.step()
             total += float(loss)
+        lm.eval()
+        with torch.no_grad():
+            val_bits = sum(_seq_ce_bits(lm, s) for s in val)
+            val_tok = sum(max(0, len(s) - 1) for s in val) or 1
+            val_bpt = val_bits / val_tok
+
+        if val_bpt < best_val - 1e-6:
+            best_val = val_bpt
+            worse_streak = 0
+        else:
+            worse_streak += 1
+
+        if early_stop and worse_streak >= max(1, patience):
+            break
+
     lm.eval()
     return lm
 

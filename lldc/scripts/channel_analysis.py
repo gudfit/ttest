@@ -6,10 +6,14 @@ from collections import Counter, defaultdict
 import math, json, random, logging
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from datasketch import MinHash, MinHashLSH  # NEW
+from datasketch import MinHash, MinHashLSH
 
 from lldc.utils.logging import setup_logging
 from lldc.metrics.fidelity import character_level_fidelity
+
+from lldc.baselines.kenlm_subsample import (
+    subsample_and_reconstruct_kenlm5,
+)
 
 
 def _cfg_get(cfg: Any, dotted: str, default=None):
@@ -54,7 +58,6 @@ def semantic_dedup_coverage(
     embs = enc.encode(
         texts, convert_to_numpy=True, show_progress_bar=False, normalize_embeddings=True
     )
-
     log.info("[semantic_dedup] Creating MinHash signatures...")
     minhashes = []
     for vec in embs:
@@ -87,110 +90,17 @@ def semantic_dedup_coverage(
     return 100.0 * len(duplicate_pairs) / max(1, total_possible_pairs)
 
 
-class KN5:
-    def __init__(self, n: int = 5, discount: float = 0.75, vocab_limit: int = 50000):
-        self.n = n
-        self.D = discount
-        self.vocab_limit = vocab_limit
-        self.counts = [Counter() for _ in range(n)]
-        self.context_counts = [Counter() for _ in range(n)]
-        self.vocab: List[str] = []
-
-    def fit(self, texts: Iterable[str]):
-        wc = Counter()
-        for t in texts:
-            toks = t.split()
-            wc.update(toks)
-            toks = ["<s>"] * (self.n - 1) + toks + ["</s>"]
-            for i in range(len(toks)):
-                for k in range(1, self.n + 1):
-                    if i - k + 1 < 0:
-                        break
-                    gram = tuple(toks[i - k + 1 : i + 1])
-                    self.counts[k - 1][gram] += 1
-                    if k > 1:
-                        ctx = gram[:-1]
-                        self.context_counts[k - 1][ctx] += 1
-        self.vocab = [w for w, _ in wc.most_common(self.vocab_limit)]
-
-    def prob(self, hist: Tuple[str, ...], w: str) -> float:
-        def kn_prob(k, ctx, w):
-            if k == 1:
-                cont = sum(1 for (x,), c in self.counts[0].items() if x == w)
-                denom = len(self.counts[1]) if self.counts[1] else 1
-                return cont / max(1, denom)
-            gram = ctx + (w,)
-            c = self.counts[k - 1][gram]
-            ctx_c = self.context_counts[k - 1][ctx]
-            if ctx_c > 0:
-                lambda_ctx = (
-                    self.D
-                    * len(
-                        [
-                            g
-                            for g, cnt in self.counts[k - 1].items()
-                            if g[:-1] == ctx and cnt > 0
-                        ]
-                    )
-                ) / ctx_c
-                p_cont = kn_prob(k - 1, ctx[1:], w)
-                return max(c - self.D, 0) / ctx_c + lambda_ctx * p_cont
-            else:
-                return kn_prob(k - 1, ctx[1:], w)
-
-        k = min(self.n, len(hist) + 1)
-        ctx = hist[-(k - 1) :] if k > 1 else tuple()
-        return kn_prob(k, tuple(ctx), w)
-
-    def argmax_next(self, hist: List[str]) -> str:
-        best_w, best_p = None, -1.0
-        ctx = tuple(hist[-(self.n - 1) :])
-        for w in self.vocab:
-            p = self.prob(ctx, w)
-            if p > best_p:
-                best_p, best_w = p, w
-        return best_w or (self.vocab[0] if self.vocab else "</s>")
-
-
-def regen_baseline_everyN_kn(text: str, N: int, kn5: KN5) -> str:
-    toks = text.split()
-    if not toks:
-        return ""
-    recon: List[str] = []
-    for i in range(len(toks)):
-        if i % N == 0:
-            recon.append(toks[i])
-        else:
-            recon.append(kn5.argmax_next(recon))
-    return " ".join(recon)
-
-
-def _most_common_token(texts: List[str]) -> str | None:
-    cnt = Counter()
-    for t in texts:
-        cnt.update(t.split())
-    if not cnt:
-        return None
-    return cnt.most_common(1)[0][0]
-
-
-def regen_baseline_everyN_unigram(text: str, N: int, fill_tok: str | None) -> str:
-    toks = text.split()
-    if not toks:
-        return ""
-    fill = fill_tok if fill_tok is not None else toks[0]
-    out: List[str] = []
-    for i, w in enumerate(toks):
-        if i % N == 0:
-            out.append(w)
-        else:
-            out.append(fill)
-    return " ".join(out)
-
-
 def run_channel_analysis(
-    cfg: Any, recon_texts: List[str], orig_texts: List[str], kn5: KN5 | None = None
+    cfg: Any,
+    recon_texts: List[str],
+    orig_texts: List[str],
+    train_texts: List[str] | None = None,
 ) -> Dict[str, float]:
+    """
+    Compute channel statistics on reconstructions and a *standard* n-gram baseline
+    using KenLM (5-gram). This replaces the ad-hoc KN5 for Experiment 2B to align
+    with the methodology claim.
+    """
     n_list = list(
         _cfg_get(
             cfg,
@@ -227,18 +137,41 @@ def run_channel_analysis(
             _cfg_get(cfg, "experiment.regen_baseline.subsample_every_N", []),
         )
     )
-    base_scores = {}
-    unigram_fill = _most_common_token(orig_texts)
-    for N in regen_Ns:
-        if kn5 is None:
-            recon_b = [
-                regen_baseline_everyN_unigram(t, N, unigram_fill) for t in orig_texts
-            ]
-        else:
-            recon_b = [regen_baseline_everyN_kn(t, N, kn5) for t in orig_texts]
-        base_scores[f"regen_every_{N}_charF"] = float(
-            np.mean(
-                [character_level_fidelity(o, r) for o, r in zip(orig_texts, recon_b)]
-            )
+    workdir = str(
+        _cfg_get(
+            cfg,
+            "regen_baseline.kenlm_workdir",
+            _cfg_get(
+                cfg,
+                "experiment.regen_baseline.kenlm_workdir",
+                "artifacts/runs/kenlm_5gram",
+            ),
         )
+    )
+    base_scores: Dict[str, float] = {}
+    if train_texts and regen_Ns:
+        try:
+            outputs = subsample_and_reconstruct_kenlm5(
+                test_texts=orig_texts,
+                train_texts=train_texts,
+                rates=regen_Ns,
+                workdir=workdir,
+                beam_size=int(_cfg_get(cfg, "regen_baseline.beam_size", 16)),
+                cand_per_step=int(_cfg_get(cfg, "regen_baseline.cand_per_step", 200)),
+                max_vocab=int(_cfg_get(cfg, "regen_baseline.max_vocab", 50000)),
+            )
+            for item in outputs:
+                N = int(item["rate_N"])
+                recons = item["reconstructions"]
+                score = float(
+                    np.mean(
+                        [
+                            character_level_fidelity(o, r)
+                            for o, r in zip(orig_texts, recons)
+                        ]
+                    )
+                )
+                base_scores[f"regen_every_{N}_charF"] = score
+        except Exception:
+            pass
     return {**cov, **base_scores}
