@@ -93,9 +93,7 @@ class VQBottleneckWrapper(nn.Module):
             ce = F.cross_entropy(
                 shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
             )
-            loss = (
-                ce + vqo.commit_loss * self.vq.beta + vqo.codebook_loss * self.vq.beta
-            )
+            loss = ce + self.vq.beta * vqo.commit_loss + vqo.codebook_loss
         return {
             "logits": logits,
             "loss": loss,

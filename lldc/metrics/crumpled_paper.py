@@ -23,13 +23,15 @@ class Oracle:
         enc = self.tok(text, add_special_tokens=False, return_tensors="pt").to(
             self.device
         )
-        ids = enc["input_ids"][0]  # [L]
-        out = self.m(input_ids=ids.unsqueeze(0), labels=ids.unsqueeze(0))
+        ids = enc["input_ids"][0]
         logits = self.m(input_ids=ids.unsqueeze(0)).logits[0]
-        probs = torch.softmax(logits, dim=-1)
-        ps = probs[torch.arange(ids.size(0)), ids].clamp_min(1e-12)
-        s_bits = (-torch.log2(ps)).tolist()
-        return ids.tolist(), [float(x) for x in s_bits]
+        if ids.size(0) < 2:
+            return ids.tolist(), []
+        logp = torch.log_softmax(logits[:-1], dim=-1)
+        true_next = ids[1:].unsqueeze(-1)
+        nats = -logp.gather(-1, true_next).squeeze(-1)
+        bits = (nats / math.log(2.0)).tolist()
+        return ids.tolist(), [float(x) for x in bits]
 
 
 def _needleman_wunsch_cost(
@@ -56,13 +58,15 @@ def _needleman_wunsch_cost(
             c_sub = dp[i - 1][j - 1] + abs(a_s[i - 1] - b_s[j - 1])
             c_del = dp[i - 1][j] + gap_cost
             c_ins = dp[i][j - 1] + gap_cost
-            best = min(
-                (c_sub, (i - 1, j - 1)),
-                (c_del, (i - 1, j)),
-                (c_ins, (i, j - 1)),
-                key=lambda z: z[0],
-            )
-            dp[i][j], bt[i][j] = best
+            if c_sub <= c_del and c_sub <= c_ins:
+                dp[i][j] = c_sub
+                bt[i][j] = (i - 1, j - 1)
+            elif c_del <= c_ins:
+                dp[i][j] = c_del
+                bt[i][j] = (i - 1, j)
+            else:
+                dp[i][j] = c_ins
+                bt[i][j] = (i, j - 1)
 
     path: List[Tuple[int, int]] = []
     i, j = n, m

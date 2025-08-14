@@ -77,36 +77,54 @@ def _num_heads_and_size(attn_module: nn.Module) -> Tuple[int, int]:
 
 
 def head_saliency(attn_module: nn.Module) -> torch.Tensor:
-    wq = getattr(attn_module, "q_proj", None) or getattr(attn_module, "c_attn", None)
-    if wq is None:
+    if hasattr(attn_module, "c_attn"):
+        W = attn_module.c_attn.weight.data
+        d = W.size(1) // 3 if W.size(1) % 3 == 0 else W.size(0) // 3
+        if W.size(1) % 3 == 0:
+            q, k, v = W[:, :d], W[:, d : 2 * d], W[:, 2 * d :]
+            H = getattr(
+                attn_module, "num_heads", getattr(attn_module, "num_attention_heads")
+            )
+            D = d // H
+            sal = [
+                (
+                    q[:, h * D : (h + 1) * D].abs().mean()
+                    + k[:, h * D : (h + 1) * D].abs().mean()
+                    + v[:, h * D : (h + 1) * D].abs().mean()
+                ).item()
+                for h in range(H)
+            ]
+            return torch.tensor(sal)
+        else:
+            d = W.size(0) // 3
+            q, k, v = W[:d, :], W[d : 2 * d, :], W[2 * d :, :]
+            H = getattr(
+                attn_module, "num_heads", getattr(attn_module, "num_attention_heads")
+            )
+            D = q.size(0) // H
+            sal = [
+                (
+                    q[h * D : (h + 1) * D, :].abs().mean()
+                    + k[h * D : (h + 1) * D, :].abs().mean()
+                    + v[h * D : (h + 1) * D, :].abs().mean()
+                ).item()
+                for h in range(H)
+            ]
+            return torch.tensor(sal)
+    else:
         q = attn_module.self.query.weight.data
         k = attn_module.self.key.weight.data
         v = attn_module.self.value.weight.data
         H = attn_module.num_attention_heads
         D = q.size(0) // H
-        sal = []
-        for h in range(H):
-            s = (
+        sal = [
+            (
                 q[h * D : (h + 1) * D, :].abs().mean()
                 + k[h * D : (h + 1) * D, :].abs().mean()
                 + v[h * D : (h + 1) * D, :].abs().mean()
-            )
-            sal.append(s.item())
-        return torch.tensor(sal)
-    else:
-        W = attn_module.c_attn.weight.data
-        d = W.size(1) // 3
-        q, k, v = W[:, :d], W[:, d : 2 * d], W[:, 2 * d :]
-        H = attn_module.num_heads
-        D = d // H
-        sal = []
-        for h in range(H):
-            sl = (
-                q[:, h * D : (h + 1) * D].abs().mean()
-                + k[:, h * D : (h + 1) * D].abs().mean()
-                + v[:, h * D : (h + 1) * D].abs().mean()
-            )
-            sal.append(float(sl))
+            ).item()
+            for h in range(H)
+        ]
         return torch.tensor(sal)
 
 

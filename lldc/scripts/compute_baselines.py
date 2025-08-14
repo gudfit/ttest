@@ -1,7 +1,8 @@
 # lldc/scripts/compute_baselines.py
 
-import hydra
 from __future__ import annotations
+
+import hydra
 from typing import Any, Dict, List
 import json, os, subprocess, tempfile, time
 from pathlib import Path

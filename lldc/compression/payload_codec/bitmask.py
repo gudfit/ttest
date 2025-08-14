@@ -21,6 +21,8 @@ def pack_bitmask(keep_flags: Iterable[bool]) -> bytes:
 
 
 def unpack_bitmask(b: bytes, n_tokens: int) -> List[bool]:
+    if len(b) * 8 < n_tokens:
+        raise ValueError(f"bitmask too short: {len(b) * 8} bits for {n_tokens} tokens")
     flags: List[bool] = []
     for i in range(n_tokens):
         byte = b[i // 8]

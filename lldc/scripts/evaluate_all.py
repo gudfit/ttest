@@ -17,6 +17,9 @@ from lldc.utils import wandb_log
 from lldc.metrics.fidelity import character_level_fidelity
 from lldc.eval.perplexity import ar_bpc as compute_ar_bpc
 from lldc.baselines.kenlm_subsample import kenlm_ngram_bpc
+from lldc.eval.functional import evaluate_superglue_zero_shot
+from lldc.eval.factual_recall import evaluate_factual_recall
+from lldc.data.bootstrap import ensure_data
 
 _MASK_PAT = re.compile(r"mask(?:_|-)?(0\.\d+|1(?:\.0+)?)", re.I)
 _K_PAT = re.compile(r"(?:k|codebook|K)(?:_|-)?(\d{2,6})", re.I)
@@ -84,6 +87,7 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
             model = cand if cand else None
 
         total_bits = 0
+        total_token_bits = 0
         total_chars = 0
         total_kept_tokens = 0
         fids: List[float] = []
@@ -106,6 +110,7 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
                 if pb or tb:
                     saw_bit_fields = True
                 total_bits += pb + tb
+                total_token_bits += tb
                 kt = int(j.get("kept_tokens", 0))
                 total_kept_tokens += max(0, kt)
 
@@ -129,12 +134,7 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
             continue
         bpc = total_bits / float(total_chars)
         bpt = (
-            (total_bits - (total_bits - total_bits))
-            if False
-            else (total_bits - (total_bits - total_bits))
-        )
-        bpt = (
-            (total_bits - 0.0) / max(1, total_kept_tokens)
+            (total_token_bits / max(1, total_kept_tokens))
             if total_kept_tokens > 0
             else None
         )
@@ -244,12 +244,12 @@ def _write_static_and_rd_exports(
             indent=2,
         )
     )
-    (out_dir / "pm_points.json").write_text(
-        json.dumps([p for p in rd_points if p.get("method") == "PM"], indent=2)
-    )
-    (out_dir / "vq_points.json").write_text(
-        json.dumps([p for p in rd_points if p.get("method") == "VQ"], indent=2)
-    )
+    pm = [p for p in rd_points if p.get("method") == "PM"]
+    vq = [p for p in rd_points if p.get("method") == "VQ"]
+    (out_dir / "pm_points.json").write_text(json.dumps(pm, indent=2))
+    (out_dir / "vq_points.json").write_text(json.dumps(vq, indent=2))
+    (paths.rd_curves / "pm_points.json").write_text(json.dumps(pm, indent=2))
+    (paths.rd_curves / "vq_points.json").write_text(json.dumps(vq, indent=2))
 
 
 def _aggregate_mean_std(points: List[RDPoint]) -> Dict[str, Dict[str, float]]:
@@ -599,8 +599,55 @@ def main():
             paths.results, methods_bpc_runtime, static["static_bits_total"], base_chars
         )
 
+        try:
+            ds_info = ensure_data(paths.root)
+            probes_path = str(ds_info["probes"])
+            model_name = cfg.model.pretrained_name
+            tok = AutoTokenizer.from_pretrained(model_name)
+            if tok.pad_token is None and tok.eos_token:
+                tok.pad_token = tok.eos_token
+            m = AutoModelForCausalLM.from_pretrained(model_name)
+            fact = evaluate_factual_recall(
+                m,
+                tok,
+                probe_dataset_path=probes_path,
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+            )
+            (paths.results / "factual_recall.json").write_text(
+                json.dumps(fact, indent=2)
+            )
+            wandb_log.log(
+                {"eval/factual_recall_bleurt_acc": float(fact["accuracy_bleurt"])}
+            )
+        except Exception as e:
+            (paths.results / "factual_recall.json").write_text(
+                json.dumps({"error": str(e)}, indent=2)
+            )
+
+        try:
+            model_name = cfg.model.pretrained_name
+            tok = AutoTokenizer.from_pretrained(model_name)
+            if tok.pad_token is None and tok.eos_token:
+                tok.pad_token = tok.eos_token
+            m = AutoModelForCausalLM.from_pretrained(model_name)
+            sg = evaluate_superglue_zero_shot(
+                m,
+                tok,
+                tasks=["rte", "cb", "boolq"],
+                n=int(getattr(cfg, "superglue_n", 100) or 100),
+                device="cuda" if __import__("torch").cuda.is_available() else "cpu",
+            )
+            (paths.results / "abstract_reasoning.json").write_text(
+                json.dumps(sg, indent=2)
+            )
+            wandb_log.log({"eval/superglue_macro_f1": float(sg.get("macro_f1", 0.0))})
+        except Exception as e:
+            (paths.results / "abstract_reasoning.json").write_text(
+                json.dumps({"error": str(e)}, indent=2)
+            )
+
         log.info(
-            "[evaluate_all] Exported static size, RD points (PM/VQ), unified RD (with baselines), aggregates, and amortised curves."
+            "[evaluate_all] Exported static size, RD points (PM/VQ), unified RD (with baselines), aggregates, amortised curves, and new eval metrics."
         )
 
         try:

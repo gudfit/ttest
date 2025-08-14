@@ -278,6 +278,7 @@ def main():
                     "token_bits": 0,
                     "chars": 0,
                     "kept_tokens": 0,
+                    "orig_tokens": 0,
                 }
                 charF_scores: List[float] = []
                 chrf_scores: List[float] = []
@@ -297,6 +298,7 @@ def main():
                         add_special_tokens=False,
                     )
                     input_ids = toks["input_ids"][0].to(device)
+                    totals["orig_tokens"] += int(input_ids.numel())
 
                     surprisal = pll_surprisal_scores(
                         input_ids, mlm, tok, tok.mask_token_id
@@ -407,7 +409,13 @@ def main():
                 bpc = (totals["position_bits"] + totals["token_bits"]) / max(
                     1, totals["chars"]
                 )
-                bpt = totals["token_bits"] / max(1, totals["kept_tokens"])
+                bits_per_kept_token = totals["token_bits"] / max(
+                    1, totals["kept_tokens"]
+                )
+                bits_per_original_token = (
+                    totals["position_bits"] + totals["token_bits"]
+                ) / max(1, totals["orig_tokens"])
+
                 char_fid_point = float(sum(charF_scores) / max(1, len(charF_scores)))
                 chrf_point = float(sum(chrf_scores) / max(1, len(chrf_scores)))
                 berts_point = float(sum(berts_scores) / max(1, len(berts_scores)))
@@ -428,7 +436,7 @@ def main():
                     "strategy": strategy,
                     "mask_rate": rate,
                     "bpc": bpc,
-                    "bpt": bpt,
+                    "bpt": bits_per_kept_token,
                     "charF_mean": char_fid_point,
                     "chrf_mean": chrf_point,
                     "bertscore_f1_mean": berts_point,
@@ -436,10 +444,10 @@ def main():
                     "tcm_mean": tcm_point,
                     "pcm_mean": pcm_point,
                     "cpu_decode_ms_mean": cpu_decode_mean,
+                    "bits_per_original_token": bits_per_original_token,
                 }
-                points.append(point)
                 (paths.rd_curves / "pm_points.json").write_text(
-                    json.dumps(points, indent=2)
+                    json.dumps([point], indent=2)
                 )
 
                 wandb_log.log(
@@ -447,7 +455,8 @@ def main():
                         "pm/payload_bits": int(totals["token_bits"]),
                         "pm/pos_bits": int(totals["position_bits"]),
                         "pm/bpc": float(bpc),
-                        "pm/bpt": float(bpt),
+                        "pm/bits_per_kept_token": float(bits_per_kept_token),
+                        "pm/bits_per_original_token": float(bits_per_original_token),
                         "pm/char_fid": float(char_fid_point),
                         "pm/chrf": float(chrf_point),
                         "pm/bertscore_f1": float(berts_point),
