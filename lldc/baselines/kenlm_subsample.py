@@ -13,8 +13,14 @@ def _train_kenlm(sentences: List[str], order: int, workdir: str) -> Tuple[str, s
     corpus.write_text("\n".join(sentences), encoding="utf-8")
 
     bin_dir = Path(os.environ.get("KENLM_BIN", "/usr/local/bin"))
-    lmplz = str(bin_dir / "lmplz")
-    build_binary = str(bin_dir / "build_binary")
+    lmplz = bin_dir / "lmplz"
+    build_binary = bin_dir / "build_binary"
+
+    if not lmplz.exists() or not build_binary.exists():
+        raise RuntimeError(
+            "KenLM binaries not found. Please install KenLM and set KENLM_BIN to the "
+            "directory containing 'lmplz' and 'build_binary' (e.g., export KENLM_BIN=/path/to/kenlm/build/bin)."
+        )
 
     arpa = wd / f"lm_{order}.arpa"
     binary = wd / f"lm_{order}.binary"
@@ -28,10 +34,22 @@ def _train_kenlm(sentences: List[str], order: int, workdir: str) -> Tuple[str, s
         f'--prune 0 0 0 0 0 --temp_prefix "{tmp}" --memory {mem} '
         f'< "{corpus}" > "{arpa}"'
     )
-    subprocess.check_call(cmd_lmplz, shell=True)
+    try:
+        subprocess.check_call(cmd_lmplz, shell=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"KenLM lmplz failed (order={order}). Hint: ensure enough RAM (KENLM_MEMORY) "
+            f"and that your binaries are compatible. Original error: {e}"
+        ) from e
 
     cmd_bin = f'"{build_binary}" -a 255 -q 8 -v trie "{arpa}" "{binary}"'
-    subprocess.check_call(cmd_bin, shell=True)
+    try:
+        subprocess.check_call(cmd_bin, shell=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            f"KenLM build_binary failed. Check KENLM_BIN and permissions. Original error: {e}"
+        ) from e
+
     return str(arpa), str(binary)
 
 

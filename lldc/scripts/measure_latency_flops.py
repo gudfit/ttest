@@ -124,8 +124,8 @@ def main():
             "estimate_flops_per_seq": float(flops_seq),
             "seq_len_assumed": int(seq_len),
             "notes": (
-                "FLOPs includes 2·L²·d self-attention mixing term + projections/MLP; "
-                "encode times from forward() batches."
+                "FLOPs uses a standard approximation with quadratic attention: "
+                "~4·d·L² from attention mixing (QKᵀ + AV) plus 4·d² projections and 2·d·d_ff MLP per layer."
             ),
         }
 

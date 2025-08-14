@@ -1,16 +1,11 @@
 # lldc/eval/perplexity.py
 from __future__ import annotations
 from typing import List, Dict
+
 import math
 import torch
 import numpy as np
 import torch.nn.functional as F
-
-
-def perplexity_from_nats(total_nll_nats: float, total_tokens: int) -> float:
-    if total_tokens <= 0:
-        return float("inf")
-    return float(math.exp(total_nll_nats / float(total_tokens)))
 
 
 def ppl_causal(model, tok, texts: List[str], device="cuda") -> float:

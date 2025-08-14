@@ -1,5 +1,4 @@
 # lldc/scripts/stage2_compress_pm.py
-
 from __future__ import annotations
 from typing import Any, List, Dict, Tuple
 import json, math, time
@@ -316,8 +315,7 @@ def main():
                     kept_syms, kept_probs, _ = _encode_kept_ids_with_oracle_bits(
                         kept_ids, oracle_tok, oracle
                     )
-
-                    kept_tokens = int(len(kept_syms))
+                    kept_count = int(len(kept_syms))
 
                     token_bits = 0
                     token_decode_ms = 0.0
@@ -374,8 +372,6 @@ def main():
                         tcm_vals.append(float(m["tcm_bits"]))
                         pcm_vals.append(float(m["pcm_bits"]))
 
-                    bpt_doc = float(token_bits) / max(1, kept_tokens)
-
                     with open(dump_path, "a", encoding="utf-8") as f:
                         f.write(
                             json.dumps(
@@ -386,9 +382,8 @@ def main():
                                     "position_codec": codec_name,
                                     "position_bits": pos_bits,
                                     "token_bits": token_bits,
+                                    "kept_tokens": kept_count,
                                     "token_payload_status": token_payload_status,
-                                    "kept_tokens": kept_tokens,
-                                    "bpt": bpt_doc,
                                     "orig_chars": len(text),
                                     "original": text,
                                     "reconstruction": recon_text,
@@ -405,14 +400,13 @@ def main():
 
                     totals["position_bits"] += pos_bits
                     totals["token_bits"] += token_bits
+                    totals["kept_tokens"] += kept_count
                     totals["chars"] += len(text)
-                    totals["kept_tokens"] += kept_tokens
 
                 bpc = (totals["position_bits"] + totals["token_bits"]) / max(
                     1, totals["chars"]
                 )
-                bpt_point = float(totals["token_bits"]) / max(1, totals["kept_tokens"])
-
+                bpt = totals["token_bits"] / max(1, totals["kept_tokens"])
                 char_fid_point = float(sum(charF_scores) / max(1, len(charF_scores)))
                 chrf_point = float(sum(chrf_scores) / max(1, len(chrf_scores)))
                 berts_point = float(sum(berts_scores) / max(1, len(berts_scores)))
@@ -433,7 +427,7 @@ def main():
                     "strategy": strategy,
                     "mask_rate": rate,
                     "bpc": bpc,
-                    "bpt": bpt_point,
+                    "bpt": bpt,
                     "charF_mean": char_fid_point,
                     "chrf_mean": chrf_point,
                     "bertscore_f1_mean": berts_point,
@@ -452,7 +446,7 @@ def main():
                         "pm/payload_bits": int(totals["token_bits"]),
                         "pm/pos_bits": int(totals["position_bits"]),
                         "pm/bpc": float(bpc),
-                        "pm/bpt": float(bpt_point),
+                        "pm/bpt": float(bpt),
                         "pm/char_fid": float(char_fid_point),
                         "pm/chrf": float(chrf_point),
                         "pm/bertscore_f1": float(berts_point),

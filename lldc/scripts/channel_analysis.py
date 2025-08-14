@@ -139,6 +139,29 @@ def regen_baseline_everyN_kn(text: str, N: int, kn5: KN5) -> str:
     return " ".join(recon)
 
 
+def _most_common_token(texts: List[str]) -> str | None:
+    cnt = Counter()
+    for t in texts:
+        cnt.update(t.split())
+    if not cnt:
+        return None
+    return cnt.most_common(1)[0][0]
+
+
+def regen_baseline_everyN_unigram(text: str, N: int, fill_tok: str | None) -> str:
+    toks = text.split()
+    if not toks:
+        return ""
+    fill = fill_tok if fill_tok is not None else toks[0]
+    out: List[str] = []
+    for i, w in enumerate(toks):
+        if i % N == 0:
+            out.append(w)
+        else:
+            out.append(fill)
+    return " ".join(out)
+
+
 def run_channel_analysis(
     cfg: Any, recon_texts: List[str], orig_texts: List[str], kn5: KN5 | None = None
 ) -> Dict[str, float]:
@@ -183,20 +206,13 @@ def run_channel_analysis(
     from lldc.metrics.fidelity import character_level_fidelity
 
     base_scores = {}
+    unigram_fill = _most_common_token(orig_texts)
+
     for N in regen_Ns:
         if kn5 is None:
-            recon_b: List[str] = []
-            for t in orig_texts:
-                toks = t.split()
-                out: List[str] = []
-                last_kept: str | None = None
-                for i, w in enumerate(toks):
-                    if i % N == 0:
-                        out.append(w)
-                        last_kept = w
-                    else:
-                        out.append(last_kept if last_kept is not None else w)
-                recon_b.append(" ".join(out))
+            recon_b = [
+                regen_baseline_everyN_unigram(t, N, unigram_fill) for t in orig_texts
+            ]
         else:
             recon_b = [regen_baseline_everyN_kn(t, N, kn5) for t in orig_texts]
         base_scores[f"regen_every_{N}_charF"] = float(

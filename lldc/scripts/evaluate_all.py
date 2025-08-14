@@ -24,6 +24,7 @@ class RDPoint:
     mask_rate: float | None
     codebook_K: int | None
     bpc: float
+    bpt: float | None
     fidelity: float | None
     chrf: float | None
     berts_f1: float | None
@@ -79,6 +80,7 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
 
         total_bits = 0
         total_chars = 0
+        total_kept_tokens = 0
         fids: List[float] = []
         chrf: List[float] = []
         berts: List[float] = []
@@ -99,6 +101,9 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
                 if pb or tb:
                     saw_bit_fields = True
                 total_bits += pb + tb
+                kt = int(j.get("kept_tokens", 0))
+                total_kept_tokens += max(0, kt)
+
                 orig = j.get("original", "") or ""
                 recon = j.get("reconstruction", "") or ""
                 total_chars += max(1, int(j.get("orig_chars", len(orig))))
@@ -118,6 +123,17 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
         if total_chars == 0 or not saw_bit_fields:
             continue
         bpc = total_bits / float(total_chars)
+        bpt = (
+            (total_bits - (total_bits - total_bits))
+            if False
+            else (total_bits - (total_bits - total_bits))
+        )
+        bpt = (
+            (total_bits - 0.0) / max(1, total_kept_tokens)
+            if total_kept_tokens > 0
+            else None
+        )
+
         fid = float(sum(fids) / max(1, len(fids))) if fids else None
         c = float(sum(chrf) / max(1, len(chrf))) if chrf else None
         b = float(sum(berts) / max(1, len(berts))) if berts else None
@@ -131,6 +147,7 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
                 mask_rate=mask_rate,
                 codebook_K=codebook_K,
                 bpc=bpc,
+                bpt=bpt,
                 fidelity=fid,
                 chrf=c,
                 berts_f1=b,
@@ -231,11 +248,6 @@ def _write_static_and_rd_exports(
 
 
 def _aggregate_mean_std(points: List[RDPoint]) -> Dict[str, Dict[str, float]]:
-    """
-    Group by "key": PM → (strategy, mask_rate) if available, else method only.
-               VQ → (codebook_K) if available, else method only.
-    Compute mean±std for bpc and fidelity-like metrics.
-    """
     buckets: DefaultDict[str, List[RDPoint]] = defaultdict(list)
     for p in points:
         if p.method == "PM" and p.mask_rate is not None:
@@ -256,12 +268,14 @@ def _aggregate_mean_std(points: List[RDPoint]) -> Dict[str, Dict[str, float]]:
     summary: Dict[str, Dict[str, float]] = {}
     for key, arr in buckets.items():
         bpcs = [p.bpc for p in arr]
+        bpts = [p.bpt for p in arr if p.bpt is not None]
         fids = [p.fidelity for p in arr if p.fidelity is not None]
         chrf = [p.chrf for p in arr if p.chrf is not None]
         bsf = [p.berts_f1 for p in arr if p.berts_f1 is not None]
         sem = [p.sem_span_fid for p in arr if p.sem_span_fid is not None]
         dec = [p.cpu_decode_ms for p in arr if p.cpu_decode_ms is not None]
         bpc_m, bpc_s = _safe_stats(bpcs)
+        bpt_m, bpt_s = _safe_stats(bpts) if bpts else (float("nan"), float("nan"))
         fid_m, fid_s = _safe_stats(fids) if fids else (float("nan"), float("nan"))
         ch_m, ch_s = _safe_stats(chrf) if chrf else (float("nan"), float("nan"))
         bs_m, bs_s = _safe_stats(bsf) if bsf else (float("nan"), float("nan"))
@@ -270,6 +284,8 @@ def _aggregate_mean_std(points: List[RDPoint]) -> Dict[str, Dict[str, float]]:
         summary[key] = {
             "bpc_mean": bpc_m,
             "bpc_std": bpc_s,
+            "bpt_mean": bpt_m,
+            "bpt_std": bpt_s,
             "charF_mean": fid_m,
             "charF_std": fid_s,
             "chrf_mean": ch_m,
@@ -349,6 +365,149 @@ def _export_amortised_curves(
         pass
 
 
+def _export_unified_rd(points_pm_vq: List[RDPoint], paths: Paths) -> None:
+    out_dir = paths.results
+    payload_root = paths.payloads
+
+    zstd_bpc = cmix_bpc = kenlm8_bpc = None
+    zstd_dec_ms = cmix_dec_ms = None
+    baselines_file = out_dir / "baselines.json"
+    if baselines_file.exists():
+        try:
+            b = json.loads(baselines_file.read_text())
+            z = b.get("zstd_22", {})
+            c = b.get("cmix", {})
+            k = b.get("kenlm_8gram", {})
+            zstd_bpc = float(z.get("bpc")) if "bpc" in z else None
+            cmix_bpc = float(c.get("bpc")) if "bpc" in c else None
+            kenlm8_bpc = float(k.get("bpc")) if "bpc" in k else None
+            zstd_dec_ms = (
+                float(z.get("cpu_decode_ms")) if "cpu_decode_ms" in z else None
+            )
+            cmix_dec_ms = (
+                float(c.get("cpu_decode_ms")) if "cpu_decode_ms" in c else None
+            )
+        except Exception:
+            pass
+
+    ar_bpc_val = None
+    ar_file = out_dir / "ar_baseline.json"
+    if ar_file.exists():
+        try:
+            jj = json.loads(ar_file.read_text())
+            ar_bpc_val = float(jj.get("bpc"))
+        except Exception:
+            pass
+
+    unified = []
+    for p in points_pm_vq:
+        rec = {
+            "method": p.method,
+            "model": p.model,
+            "mask_rate": p.mask_rate,
+            "codebook_K": p.codebook_K,
+            "bpc": p.bpc,
+            "bpt": p.bpt,
+            "distortion_1_minus_charF": (
+                (1.0 - p.fidelity) if p.fidelity is not None else None
+            ),
+            "charF": p.fidelity,
+            "cpu_decode_ms": p.cpu_decode_ms,
+            "n_docs": p.n_docs,
+        }
+        unified.append(rec)
+
+    def _add_lossless(name: str, bpc: float | None, dec_ms: float | None):
+        if bpc is None:
+            return
+        unified.append(
+            {
+                "method": name,
+                "model": None,
+                "mask_rate": None,
+                "codebook_K": None,
+                "bpc": float(bpc),
+                "bpt": None,
+                "distortion_1_minus_charF": 0.0,
+                "charF": 1.0,
+                "cpu_decode_ms": dec_ms,
+                "n_docs": 1,
+            }
+        )
+
+    _add_lossless("zstd", zstd_bpc, zstd_dec_ms)
+    _add_lossless("cmix", cmix_bpc, cmix_dec_ms)
+    if kenlm8_bpc is not None:
+        unified.append(
+            {
+                "method": "kenlm-8gram",
+                "model": None,
+                "mask_rate": None,
+                "codebook_K": None,
+                "bpc": float(kenlm8_bpc),
+                "bpt": None,
+                "distortion_1_minus_charF": None,
+                "charF": None,
+                "cpu_decode_ms": None,
+                "n_docs": 1,
+            }
+        )
+    if ar_bpc_val is not None:
+        unified.append(
+            {
+                "method": "AR(gpt2-large)",
+                "model": None,
+                "mask_rate": None,
+                "codebook_K": None,
+                "bpc": float(ar_bpc_val),
+                "bpt": None,
+                "distortion_1_minus_charF": None,
+                "charF": None,
+                "cpu_decode_ms": None,
+                "n_docs": 1,
+            }
+        )
+
+    (out_dir / "rd_points_all.json").write_text(json.dumps(unified, indent=2))
+
+    try:
+        import matplotlib.pyplot as plt
+
+        plt.figure()
+        seen_labels = set()
+        for rec in unified:
+            x = rec.get("bpc", None)
+            y = rec.get("distortion_1_minus_charF", None)
+            m = rec.get("method", "Unknown")
+            if x is None or y is None:
+                continue
+            label = m if m not in seen_labels else None
+            plt.scatter([x], [y], label=label, marker="o")
+            if label:
+                seen_labels.add(m)
+
+        if ar_bpc_val is not None:
+            plt.axvline(ar_bpc_val, linestyle="--")
+            plt.text(
+                ar_bpc_val,
+                plt.ylim()[1] * 0.9,
+                "AR(gpt2-large) bpc",
+                rotation=90,
+                va="top",
+            )
+
+        plt.xlabel("Bits per character (BPC)")
+        plt.ylabel("Distortion (1 - charF)")
+        plt.title("Unified RD: PM, VQ, and Lossless Baselines")
+        if seen_labels:
+            plt.legend()
+        plt.tight_layout()
+        plt.savefig(out_dir / "rd_unified.png", dpi=160)
+        plt.close()
+    except Exception:
+        pass
+
+
 def main():
     import hydra
 
@@ -367,6 +526,7 @@ def main():
                     "mask_rate": p.mask_rate,
                     "codebook_K": p.codebook_K,
                     "bpc": p.bpc,
+                    "bpt": p.bpt,
                     "charF_mean": p.fidelity,
                     "chrf_mean": p.chrf,
                     "bertscore_f1_mean": p.berts_f1,
@@ -431,9 +591,7 @@ def main():
                 json.dumps({"error": str(e)}, indent=2)
             )
 
-        baselines_file = paths.results / "baselines.json"
-        if baselines_file.exists():
-            log.info(f"[evaluate_all] Found external baselines -> {baselines_file}")
+        _export_unified_rd(rd_points_objects, paths)
 
         methods_bpc_runtime: Dict[str, float] = {}
         for p in rd_points_objects:
@@ -447,7 +605,7 @@ def main():
         )
 
         log.info(
-            f"[evaluate_all] Wrote RD points, static size, aggregates and amortised curves to {paths.results}"
+            "[evaluate_all] Exported static size, RD points (PM/VQ), unified RD (with baselines), aggregates, and amortised curves."
         )
 
         try:

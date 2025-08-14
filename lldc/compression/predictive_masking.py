@@ -46,6 +46,8 @@ def entropy_equalisation_mask(
         end = min(seq_len, start + window)
         w = surprisal_bits[start:end]
         k_keep = int(round(keep_fraction * (end - start)))
+        if k_keep <= 0:
+            continue
         order = torch.argsort(w, dim=0, descending=True)
         idx = order[:k_keep] + start
         keep[idx] = True
