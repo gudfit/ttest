@@ -1,3 +1,4 @@
+# lldc/baselines/kenlm_subsample.py
 from __future__ import annotations
 from typing import Dict, List, Tuple
 from pathlib import Path
@@ -43,6 +44,8 @@ def _load_kenlm(arpa_path: str, binary_path: str | None = None):
 
 
 def _build_vocab(docs: List[str], max_vocab: int = 50000) -> List[str]:
+    from collections import Counter
+
     cnt = Counter()
     for t in docs:
         cnt.update(t.split())
@@ -138,3 +141,19 @@ def subsample_and_reconstruct_kenlm5(
             {"rate_N": N, "reconstructions": recons, "subsamples_payload": payloads}
         )
     return outputs
+
+
+def kenlm_ngram_bpc(
+    train_texts: List[str], test_texts: List[str], workdir: str, order: int = 8
+) -> float:
+    arpa, binary = _train_kenlm(train_texts, order=order, workdir=workdir)
+    lm = _load_kenlm(arpa, binary)
+    import kenlm, math
+
+    total_log10 = 0.0
+    total_chars = 0
+    for t in test_texts:
+        total_log10 += lm.score(t, bos=True, eos=True)
+        total_chars += len(t)
+    bits = -total_log10 / math.log10(2.0)
+    return bits / max(1, total_chars)

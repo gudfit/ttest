@@ -1,6 +1,16 @@
+# lldc/eval/perplexity.py
 from __future__ import annotations
 from typing import List, Dict
-import math, torch, numpy as np
+import math
+import torch
+import numpy as np
+import torch.nn.functional as F
+
+
+def perplexity_from_nats(total_nll_nats: float, total_tokens: int) -> float:
+    if total_tokens <= 0:
+        return float("inf")
+    return float(math.exp(total_nll_nats / float(total_tokens)))
 
 
 def ppl_causal(model, tok, texts: List[str], device="cuda") -> float:
@@ -40,3 +50,24 @@ def compute_ppl(model, tok, texts: List[str], device="cuda") -> Dict:
         return {"ppl": ppl_causal(model, tok, texts, device)}
     else:
         return {"pppl": pppl_mlm(model, tok, texts, device)}
+
+
+def ar_bpc(model, tok, texts: List[str], device="cuda") -> float:
+    model.to(device).eval()
+    total_bits = 0.0
+    total_chars = 0
+    with torch.no_grad():
+        for t in texts:
+            enc = tok(t, return_tensors="pt").to(device)
+            ids = enc["input_ids"][0]
+            if ids.numel() < 2:
+                total_chars += len(t)
+                continue
+            logits = model(input_ids=ids.unsqueeze(0)).logits[0]
+            logp = F.log_softmax(logits[:-1], dim=-1)
+            true_next = ids[1:].unsqueeze(-1)
+            nats = -logp.gather(-1, true_next).squeeze(-1).sum().item()
+            bits = nats / math.log(2.0)
+            total_bits += bits
+            total_chars += len(t)
+    return total_bits / max(1, total_chars)

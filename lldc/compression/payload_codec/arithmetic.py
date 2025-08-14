@@ -11,12 +11,8 @@ except Exception:
 def encode_with_probs(
     symbols: Sequence[int], probs: Sequence[Sequence[float]]
 ) -> bytes:
-    """
-    Arithmetic-code `symbols` given per-step categorical probabilities `probs`.
-    probs[t] is a length-V vector summing to 1.
-    """
     if constriction is None:
-        return bytes(symbols)
+        raise RuntimeError("constriction>=0.3 required for arithmetic coding")
     coder = constriction.stream.queue_bit_coder.QueueBitCoder()
     for s, p in zip(symbols, probs):
         p_arr = np.asarray(p, dtype=np.float64)
@@ -28,7 +24,7 @@ def encode_with_probs(
 
 def decode_with_probs(payload: bytes, probs: Sequence[Sequence[float]]) -> List[int]:
     if constriction is None:
-        return list(payload)
+        raise RuntimeError("constriction>=0.3 required for arithmetic coding")
     decoder = constriction.stream.queue_bit_coder.QueueBitCoder(payload)
     out: List[int] = []
     for p in probs:

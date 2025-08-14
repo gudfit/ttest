@@ -1,3 +1,4 @@
+# lldc/models/specialization.py
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Literal
@@ -8,7 +9,6 @@ Saliency = Literal["magnitude"]
 
 
 def _collect_ffn_channels(module: nn.Module) -> torch.Tensor:
-    # works for BERT/RoBERTa style FFN: intermediate.dense -> output.dense
     inter = getattr(module, "intermediate", None)
     out = getattr(module, "output", None)
     if inter is None or out is None:
@@ -17,24 +17,47 @@ def _collect_ffn_channels(module: nn.Module) -> torch.Tensor:
     dense_o = getattr(out, "dense", None)
     if dense_i is None or dense_o is None:
         return torch.empty(0)
-    # saliency per hidden channel (magnitude of outgoing weights)
-    w = dense_i.weight.detach()  # [d_inter, d_model]
-    sal = w.abs().mean(dim=1)  # [d_inter]
+    w = dense_i.weight.detach()
+    sal = w.abs().mean(dim=1)
     return sal
+
+
+def _collect_gpt2_mlp_channels(mlp: nn.Module) -> torch.Tensor:
+    c_fc = getattr(mlp, "c_fc", None)
+    c_proj = getattr(mlp, "c_proj", None)
+    if c_fc is None or c_proj is None:
+        return torch.empty(0)
+    W_in = c_fc.weight.detach()
+    W_out = c_proj.weight.detach()
+    sal_in = W_in.abs().mean(dim=0)
+    sal_out = W_out.abs().mean(dim=1)
+    return sal_in + sal_out
 
 
 def prune_ffn_block(module: nn.Module, keep_mask: torch.Tensor):
     inter = module.intermediate.dense
     out = module.output.dense
-    # inter: [d_inter, d_model], out: [d_model, d_inter]
     with torch.no_grad():
         inter.weight = nn.Parameter(inter.weight[keep_mask, :].clone())
         inter.bias = nn.Parameter(inter.bias[keep_mask].clone())
         out.weight = nn.Parameter(out.weight[:, keep_mask].clone())
-        # out.bias unchanged
-    # update dims in config if present
     if hasattr(module, "config"):
         module.config.intermediate_size = int(keep_mask.sum().item())
+
+
+def prune_gpt2_mlp_block(mlp: nn.Module, keep_mask: torch.Tensor):
+    c_fc = getattr(mlp, "c_fc", None)
+    c_proj = getattr(mlp, "c_proj", None)
+    if c_fc is None or c_proj is None:
+        return
+    with torch.no_grad():
+        c_fc.weight = nn.Parameter(c_fc.weight[:, keep_mask].clone())
+        if getattr(c_fc, "bias", None) is not None:
+            c_fc.bias = nn.Parameter(c_fc.bias[keep_mask].clone())
+        c_proj.weight = nn.Parameter(c_proj.weight[keep_mask, :].clone())
+    cfg = getattr(mlp, "config", getattr(getattr(mlp, "parent", None), "config", None))
+    if cfg is not None and hasattr(cfg, "n_inner") and isinstance(cfg.n_inner, int):
+        cfg.n_inner = int(keep_mask.sum().item())
 
 
 def _num_heads_and_size(attn_module: nn.Module) -> Tuple[int, int]:
@@ -47,17 +70,14 @@ def _num_heads_and_size(attn_module: nn.Module) -> Tuple[int, int]:
         n_heads = attn_module.num_attention_heads
         head_dim = attn_module.attention_head_size
     except Exception:
-        # GPT2
         n_heads = attn_module.num_heads
         head_dim = attn_module.head_dim
     return int(n_heads), int(head_dim)
 
 
 def head_saliency(attn_module: nn.Module) -> torch.Tensor:
-    # magnitude of q,k,v projections per head (sum of abs)
     wq = getattr(attn_module, "q_proj", None) or getattr(attn_module, "c_attn", None)
     if wq is None:
-        # BERT-like: query,key,value separate
         q = attn_module.self.query.weight.data
         k = attn_module.self.key.weight.data
         v = attn_module.self.value.weight.data
@@ -73,8 +93,7 @@ def head_saliency(attn_module: nn.Module) -> torch.Tensor:
             sal.append(s.item())
         return torch.tensor(sal)
     else:
-        # GPT2 fused c_attn: split into q,k,v along last dim
-        W = attn_module.c_attn.weight.data  # [d_model, 3*d_model]
+        W = attn_module.c_attn.weight.data
         d = W.size(1) // 3
         q, k, v = W[:, :d], W[:, d : 2 * d], W[:, 2 * d :]
         H = attn_module.num_heads
@@ -93,44 +112,74 @@ def head_saliency(attn_module: nn.Module) -> torch.Tensor:
 def structured_prune(
     model: nn.Module, level: float, drop_heads: bool = True, drop_ffn: bool = True
 ) -> Dict[str, int]:
-    """
-    level: fraction to drop from each structure type.
-    Returns counts dropped.
-    """
     dropped = {"heads": 0, "ffn_channels": 0}
-    # Iterate encoder/decoder blocks depending on arch
-    blocks = []
-    if hasattr(model, "encoder"):  # BERT/RoBERTa
-        blocks = list(model.encoder.layer)
-    elif hasattr(model, "transformer") and hasattr(model.transformer, "h"):  # GPT2
-        blocks = list(model.transformer.h)
-    else:
+
+    is_bert_like = hasattr(model, "encoder") and hasattr(model.encoder, "layer")
+    is_gpt2_like = hasattr(model, "transformer") and hasattr(model.transformer, "h")
+
+    if not (is_bert_like or is_gpt2_like):
         return dropped
 
-    for blk in blocks:
-        if drop_heads:
-            # Derive saliency per head and drop lowest-magnitude fraction
-            try:
-                attn = blk.attention if hasattr(blk, "attention") else blk.attn
-            except Exception:
-                attn = getattr(blk, "attn", None)
-            if attn is not None:
+    blocks = list(model.encoder.layer) if is_bert_like else list(model.transformer.h)
+
+    if drop_heads:
+        if is_bert_like and hasattr(model, "prune_heads"):
+            heads_to_prune: Dict[int, List[int]] = {}
+            for li, blk in enumerate(blocks):
+                attn = getattr(blk, "attention", None)
+                if attn is None:
+                    continue
                 sal = head_saliency(attn)
                 H = sal.numel()
                 k_drop = int(level * H)
-                if k_drop > 0 and k_drop < H:
-                    thr = torch.topk(sal, k_drop, largest=False).values.max()
-                    # head_mask keeps 1 for kept heads; attach to module for use at forward
-                    mask = (sal > thr).float().to(next(model.parameters()).device)
-                    blk.register_buffer("head_mask", mask)
-                    dropped["heads"] += int((sal <= thr).sum().item())
-        if drop_ffn and hasattr(blk, "intermediate"):
-            sal = _collect_ffn_channels(blk)
-            if sal.numel() > 0:
-                k_drop = int(level * sal.numel())
-                if k_drop > 0 and k_drop < sal.numel():
-                    thr = torch.topk(sal, k_drop, largest=False).values.max()
-                    keep = sal > thr
-                    prune_ffn_block(blk, keep)
-                    dropped["ffn_channels"] += int(k_drop)
+                if k_drop <= 0 or k_drop >= H:
+                    continue
+                thr = torch.topk(sal, k_drop, largest=False).values.max()
+                to_drop = [int(i) for i, v in enumerate(sal) if v <= thr]
+                if to_drop:
+                    heads_to_prune[li] = to_drop
+                    dropped["heads"] += len(to_drop)
+            if heads_to_prune:
+                model.prune_heads(heads_to_prune)
+
+        elif is_gpt2_like:
+            for li, blk in enumerate(blocks):
+                attn = getattr(blk, "attn", None)
+                if attn is None or not hasattr(attn, "prune_heads"):
+                    continue
+                sal = head_saliency(attn)
+                H = sal.numel()
+                k_drop = int(level * H)
+                if k_drop <= 0 or k_drop >= H:
+                    continue
+                thr = torch.topk(sal, k_drop, largest=False).values.max()
+                to_drop = [int(i) for i, v in enumerate(sal) if v <= thr]
+                if not to_drop:
+                    continue
+                attn.prune_heads(set(to_drop))
+                dropped["heads"] += len(to_drop)
+
+    if drop_ffn:
+        for blk in blocks:
+            if is_bert_like and hasattr(blk, "intermediate"):
+                sal = _collect_ffn_channels(blk)
+                if sal.numel() > 0:
+                    k_drop = int(level * sal.numel())
+                    if 0 < k_drop < sal.numel():
+                        thr = torch.topk(sal, k_drop, largest=False).values.max()
+                        keep = sal > thr
+                        prune_ffn_block(blk, keep)
+                        dropped["ffn_channels"] += int((~keep).sum().item())
+            elif is_gpt2_like and hasattr(blk, "mlp"):
+                mlp = blk.mlp
+                if hasattr(mlp, "c_fc") and hasattr(mlp, "c_proj"):
+                    sal = _collect_gpt2_mlp_channels(mlp)
+                    if sal.numel() > 0:
+                        k_drop = int(level * sal.numel())
+                        if 0 < k_drop < sal.numel():
+                            thr = torch.topk(sal, k_drop, largest=False).values.max()
+                            keep = sal > thr
+                            prune_gpt2_mlp_block(mlp, keep)
+                            dropped["ffn_channels"] += int((~keep).sum().item())
+
     return dropped

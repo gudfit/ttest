@@ -1,3 +1,4 @@
+# lldc/utils/paths.py
 from __future__ import annotations
 from pathlib import Path
 
@@ -13,6 +14,7 @@ class Paths:
         self.payloads = self.artifacts / "payloads"
         self.position_codecs = self.artifacts / "position_codecs"
         self.rd_curves = self.artifacts / "rd_curves"
+        self.results = self.artifacts / "results"
 
     def ensure(self):
         for p in [
@@ -23,6 +25,7 @@ class Paths:
             self.payloads,
             self.position_codecs,
             self.rd_curves,
+            self.results,
         ]:
             p.mkdir(parents=True, exist_ok=True)
         return self

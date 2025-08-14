@@ -1,3 +1,5 @@
+# lldc/scripts/channel_analysis.py
+
 from __future__ import annotations
 from typing import Any, List, Dict, Tuple, Iterable
 from collections import Counter, defaultdict
@@ -5,6 +7,18 @@ import math, json, random
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from lldc.utils.logging import setup_logging
+
+
+def _cfg_get(cfg: Any, dotted: str, default=None):
+    cur = cfg
+    for key in dotted.split("."):
+        if cur is None:
+            return default
+        if isinstance(cur, dict):
+            cur = cur.get(key, None)
+        else:
+            cur = getattr(cur, key, None)
+    return default if cur is None else cur
 
 
 def ngram_topk_coverage(texts: List[str], n: int, top_k: int) -> float:
@@ -52,7 +66,7 @@ class KN5:
         self.n = n
         self.D = discount
         self.vocab_limit = vocab_limit
-        self.counts = [Counter() for _ in range(n)]  # 1..n
+        self.counts = [Counter() for _ in range(n)]
         self.context_counts = [Counter() for _ in range(n)]
         self.vocab: List[str] = []
 
@@ -76,9 +90,7 @@ class KN5:
     def prob(self, hist: Tuple[str, ...], w: str) -> float:
         def kn_prob(k, ctx, w):
             if k == 1:
-                cont = sum(
-                    1 for (x,), c in self.counts[0].items() if x == w
-                )  # types where w appears
+                cont = sum(1 for (x,), c in self.counts[0].items() if x == w)
                 denom = len(self.counts[1]) if self.counts[1] else 1
                 return cont / max(1, denom)
             gram = ctx + (w,)
@@ -130,28 +142,61 @@ def regen_baseline_everyN_kn(text: str, N: int, kn5: KN5) -> str:
 def run_channel_analysis(
     cfg: Any, recon_texts: List[str], orig_texts: List[str], kn5: KN5 | None = None
 ) -> Dict[str, float]:
-    cov = {}
-    for n in cfg.experiment.deduplication.ngram.n_list:
-        cov[f"ngram{n}_top{cfg.experiment.deduplication.ngram.top_k}_coverage_pct"] = (
-            ngram_topk_coverage(
-                recon_texts, n, cfg.experiment.deduplication.ngram.top_k
-            )
+    n_list = list(
+        _cfg_get(
+            cfg,
+            "deduplication.ngram.n_list",
+            _cfg_get(cfg, "experiment.deduplication.ngram.n_list", []),
         )
-    cov["semantic_dup_pct"] = semantic_dedup_coverage(
-        recon_texts, cfg.experiment.deduplication.semantic.sbert_model
+    )
+    top_k = int(
+        _cfg_get(
+            cfg,
+            "deduplication.ngram.top_k",
+            _cfg_get(cfg, "experiment.deduplication.ngram.top_k", 10),
+        )
+    )
+    sbert_model = _cfg_get(
+        cfg,
+        "deduplication.semantic.sbert_model",
+        _cfg_get(
+            cfg,
+            "experiment.deduplication.semantic.sbert_model",
+            "sentence-transformers/all-mpnet-base-v2",
+        ),
+    )
+    cov = {}
+    for n in n_list:
+        cov[f"ngram{n}_top{top_k}_coverage_pct"] = ngram_topk_coverage(
+            recon_texts, n, top_k
+        )
+    cov["semantic_dup_pct"] = semantic_dedup_coverage(recon_texts, sbert_model)
+
+    regen_Ns = list(
+        _cfg_get(
+            cfg,
+            "regen_baseline.subsample_every_N",
+            _cfg_get(cfg, "experiment.regen_baseline.subsample_every_N", []),
+        )
     )
 
-    # Regen baseline (deterministic every-N, KN-5 if provided)
     from lldc.metrics.fidelity import character_level_fidelity
 
     base_scores = {}
-    for N in cfg.experiment.regen_baseline.subsample_every_N:
+    for N in regen_Ns:
         if kn5 is None:
-            # fallback (shouldn't happen if we pass kn5 from runner)
-            recon_b = [
-                " ".join([w if i % N == 0 else w for i, w in enumerate(t.split())])
-                for t in orig_texts
-            ]
+            recon_b: List[str] = []
+            for t in orig_texts:
+                toks = t.split()
+                out: List[str] = []
+                last_kept: str | None = None
+                for i, w in enumerate(toks):
+                    if i % N == 0:
+                        out.append(w)
+                        last_kept = w
+                    else:
+                        out.append(last_kept if last_kept is not None else w)
+                recon_b.append(" ".join(out))
         else:
             recon_b = [regen_baseline_everyN_kn(t, N, kn5) for t in orig_texts]
         base_scores[f"regen_every_{N}_charF"] = float(

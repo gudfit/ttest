@@ -1,13 +1,67 @@
 # lldc/scripts/sweeps.py
+
 from __future__ import annotations
+
 from typing import Any, List
 from pathlib import Path
-import importlib, json
+import importlib
+import json
+import shlex
+import subprocess
+import sys
 
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
 from lldc.data.bootstrap import ensure_data
 from lldc.analysis.channel import run_channel, ChannelConfig
+from lldc.utils.seed import DEFAULT_SEEDS
+
+
+def _extract_hydra_overrides_from_argv(argv: List[str]) -> List[str]:
+    forwarded: List[str] = []
+    sweeps_only = {"--with-dataset-stats", "--with-latency-flops"}
+    subcommands = {"stage2", "evaluate", "eval", "train", "grid", "sweep"}
+    hydra_runtime = {"-m", "--multirun", "--cfg", "--info", "-p", "--package"}
+    for tok in argv[1:]:
+        if tok in sweeps_only or tok in subcommands or tok in hydra_runtime:
+            continue
+        forwarded.append(tok)
+    return forwarded
+
+
+def _run_cmd(cmd: List[str]) -> None:
+    print(f"[sweeps] $ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
+    subprocess.run(cmd, check=True)
+
+
+def run_post_runners(cfg: Any) -> None:
+    hydra_overrides = _extract_hydra_overrides_from_argv(sys.argv)
+    argv_tokens = set(sys.argv[1:])
+    with_dataset_stats = bool(getattr(cfg.experiment, "with_dataset_stats", False)) or (
+        "--with-dataset-stats" in argv_tokens
+    )
+    with_latency_flops = bool(getattr(cfg.experiment, "with_latency_flops", False)) or (
+        "--with-latency-flops" in argv_tokens
+    )
+    if with_dataset_stats:
+        _run_cmd(
+            [
+                sys.executable,
+                "-m",
+                "lldc.scripts.compute_dataset_stats",
+                *hydra_overrides,
+            ]
+        )
+
+    if with_latency_flops:
+        _run_cmd(
+            [
+                sys.executable,
+                "-m",
+                "lldc.scripts.measure_latency_flops",
+                *hydra_overrides,
+            ]
+        )
 
 
 def _run_module(mod: str, argv: List[str]) -> None:
@@ -17,71 +71,118 @@ def _run_module(mod: str, argv: List[str]) -> None:
 
 
 def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
-    out = []
+    out: list[dict] = []
     for p in jsonl_paths:
         with p.open("r", encoding="utf-8") as f:
-            for ln in f:
+            for i, ln in enumerate(f, 1):
                 try:
                     out.append(json.loads(ln))
                 except Exception:
-                    continue
+                    pass
     return out
 
 
-def main():
+def main() -> None:
     import hydra
 
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()
         paths = Paths().ensure()
-
         ensure_data(paths.root)
+
+        hydra_overrides = _extract_hydra_overrides_from_argv(sys.argv)
 
         exp = cfg.experiment.name
         mg = getattr(cfg.experiment, "model_groups", {})
+        num_seeds = int(getattr(cfg.experiment, "seeds", 1) or 1)
+        seed_list = list(DEFAULT_SEEDS)[:num_seeds]
 
         if exp == "e1a_wiki103":
-            for m in mg.get("mlm", []):
-                log.info(f"[sweeps:e1a] Stage1 specialise {m}")
-                _run_module("lldc.scripts.stage1_specialise", [f"model={m}"])
+            for seed in seed_list:
+                for m in mg.get("mlm", []):
+                    log.info(f"[sweeps:e1a] Stage1 specialise {m} (seed={seed})")
+                    _run_module(
+                        "lldc.scripts.stage1_specialise",
+                        [f"model={m}", f"seed={seed}", *hydra_overrides],
+                    )
 
-            for m in mg.get("mlm", []):
-                log.info(f"[sweeps:e1a] Stage2 PM {m}")
-                _run_module(
-                    "lldc.scripts.stage2_compress_pm", [f"model={m}", "dump_recon=true"]
-                )
+            for seed in seed_list:
+                for m in mg.get("mlm", []):
+                    log.info(f"[sweeps:e1a] Stage2 PM {m} (seed={seed})")
+                    _run_module(
+                        "lldc.scripts.stage2_compress_pm",
+                        [
+                            f"model={m}",
+                            f"seed={seed}",
+                            "dump_recon=true",
+                            *hydra_overrides,
+                        ],
+                    )
 
-            for m in mg.get("ar", []):
-                log.info(f"[sweeps:e1a] Stage2 VQ {m}")
-                _run_module(
-                    "lldc.scripts.stage2_compress_vq", [f"model={m}", "dump_recon=true"]
-                )
+            for seed in seed_list:
+                for m in mg.get("ar", []):
+                    log.info(f"[sweeps:e1a] Stage2 VQ {m} (seed={seed})")
+                    _run_module(
+                        "lldc.scripts.stage2_compress_vq",
+                        [
+                            f"model={m}",
+                            f"seed={seed}",
+                            "dump_recon=true",
+                            *hydra_overrides,
+                        ],
+                    )
 
-            _run_module("lldc.scripts.evaluate_all", [])
+            _run_module("lldc.scripts.compute_baselines", [*hydra_overrides])
+            _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
+            run_post_runners(cfg)
 
         elif exp == "e2a_pruning":
             levels = cfg.experiment.pruning.schedule.levels
-            for m in mg.get("mlm", []) + mg.get("ar", []):
-                arch = "mlm" if m in mg.get("mlm", []) else "ar"
-                for lvl in levels:
-                    log.info(f"[sweeps:e2a] Prune & recover {m} at level={lvl}")
-                    _run_module(
-                        "lldc.scripts.prune_and_recover",
-                        [f"model={m}", f"prune_level={lvl}", "recover_epochs=auto"],
-                    )
-                    ckpt = f"artifacts/checkpoints/{m}_pruned_{lvl}"
-                    if arch == "mlm":
-                        _run_module(
-                            "lldc.scripts.stage2_compress_pm",
-                            [f"model={m}", f"model_ckpt={ckpt}", "dump_recon=true"],
+            for seed in seed_list:
+                for m in mg.get("mlm", []) + mg.get("ar", []):
+                    arch = "mlm" if m in mg.get("mlm", []) else "ar"
+                    for lvl in levels:
+                        log.info(
+                            f"[sweeps:e2a] Prune & recover {m} at level={lvl} (seed={seed})"
                         )
-                    else:
                         _run_module(
-                            "lldc.scripts.stage2_compress_vq",
-                            [f"model={m}", f"model_ckpt={ckpt}", "dump_recon=true"],
+                            "lldc.scripts.prune_and_recover",
+                            [
+                                f"model={m}",
+                                f"prune_level={lvl}",
+                                "recover_epochs=auto",
+                                f"seed={seed}",
+                                *hydra_overrides,
+                            ],
                         )
-            _run_module("lldc.scripts.evaluate_all", [])
+                        ckpt = f"artifacts/checkpoints/{m}_pruned_{lvl}"
+                        if arch == "mlm":
+                            _run_module(
+                                "lldc.scripts.stage2_compress_pm",
+                                [
+                                    f"model={m}",
+                                    f"model_ckpt={ckpt}",
+                                    "dump_recon=true",
+                                    f"seed={seed}",
+                                    *hydra_overrides,
+                                ],
+                            )
+                        else:
+                            _run_module(
+                                "lldc.scripts.stage2_compress_vq",
+                                [
+                                    f"model={m}",
+                                    f"model_ckpt={ckpt}",
+                                    "dump_recon=true",
+                                    f"seed={seed}",
+                                    *hydra_overrides,
+                                ],
+                            )
+
+            _run_module("lldc.scripts.compute_baselines", [*hydra_overrides])
+            _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
+            run_post_runners(cfg)
 
         elif exp == "e2b_channel":
             payload_root = paths.payloads
@@ -93,16 +194,27 @@ def main():
                 log.info(
                     "[sweeps:e2b] No recon dumps found — generating via Stage2 now."
                 )
-                for m in mg.get("mlm", []):
-                    _run_module(
-                        "lldc.scripts.stage2_compress_pm",
-                        [f"model={m}", "dump_recon=true"],
-                    )
-                for m in mg.get("ar", []):
-                    _run_module(
-                        "lldc.scripts.stage2_compress_vq",
-                        [f"model={m}", "dump_recon=true"],
-                    )
+                for seed in seed_list:
+                    for m in mg.get("mlm", []):
+                        _run_module(
+                            "lldc.scripts.stage2_compress_pm",
+                            [
+                                f"model={m}",
+                                "dump_recon=true",
+                                f"seed={seed}",
+                                *hydra_overrides,
+                            ],
+                        )
+                    for m in mg.get("ar", []):
+                        _run_module(
+                            "lldc.scripts.stage2_compress_vq",
+                            [
+                                f"model={m}",
+                                "dump_recon=true",
+                                f"seed={seed}",
+                                *hydra_overrides,
+                            ],
+                        )
 
             pm_paths = list(payload_root.glob("pm_*/recons.jsonl"))
             vq_paths = list(payload_root.glob("vq_*/recons.jsonl"))
@@ -110,7 +222,11 @@ def main():
 
             orig = [d.get("original", "") for d in docs]
             recon = [d.get("reconstruction", "") for d in docs]
-            payload_bits = sum(int(d.get("payload_bits", 0)) for d in docs)
+
+            payload_bits = sum(
+                int(d.get("position_bits", 0)) + int(d.get("token_bits", 0))
+                for d in docs
+            )
             base_chars = sum(
                 max(1, int(d.get("orig_chars", len(d.get("original", "")))))
                 for d in docs
@@ -132,9 +248,13 @@ def main():
                 cfg=ChannelConfig(out_dir=paths.results / "e2b"),
             )
             log.info(f"[sweeps:e2b] Channel results -> {out_path}")
-            _run_module("lldc.scripts.evaluate_all", [])
+
+            _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
+            run_post_runners(cfg)
+
         else:
             log.error(f"Unknown experiment={exp}")
+            sys.exit(2)
 
     _run()
 

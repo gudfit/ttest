@@ -10,5 +10,5 @@ def cache_dir_for(model_name: str, K: int) -> Path:
 
 def cached_checkpoint(model_name: str, K: int) -> Path | None:
     d = cache_dir_for(model_name, K)
-    ck = d / "best.safetensors"
-    return ck if ck.exists() else None
+    ck = d / "model.pt"
+    return d if ck.exists() else None

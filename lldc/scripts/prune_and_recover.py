@@ -1,3 +1,4 @@
+# lldc/scripts/prune_and_recover.py
 from __future__ import annotations
 from typing import Any
 from pathlib import Path
@@ -15,6 +16,18 @@ from lldc.utils.logging import setup_logging
 from lldc.utils.hydra_utils import resolve_auto
 from lldc.utils.paths import Paths
 from lldc.models.specialization import structured_prune
+
+
+def _cfg_get(cfg: Any, dotted: str, default=None):
+    cur = cfg
+    for key in dotted.split("."):
+        if cur is None:
+            return default
+        if isinstance(cur, dict):
+            cur = cur.get(key, None)
+        else:
+            cur = getattr(cur, key, None)
+    return default if cur is None else cur
 
 
 def _arch_from_name(name: str) -> str:
@@ -45,15 +58,28 @@ def main():
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model.to(device)
 
+        drop_heads = bool(
+            _cfg_get(
+                cfg,
+                "pruning.structured.drop_attention_heads",
+                _cfg_get(
+                    cfg, "experiment.pruning.structured.drop_attention_heads", True
+                ),
+            )
+        )
+        drop_ffn = bool(
+            _cfg_get(
+                cfg,
+                "pruning.structured.drop_ffn_channels",
+                _cfg_get(cfg, "experiment.pruning.structured.drop_ffn_channels", True),
+            )
+        )
+
         dropped = structured_prune(
-            model,
-            level=level,
-            drop_heads=cfg.experiment.pruning.structured.drop_attention_heads,
-            drop_ffn=cfg.experiment.pruning.structured.drop_ffn_channels,
+            model, level=level, drop_heads=drop_heads, drop_ffn=drop_ffn
         )
         log.info(f"[prune] {model_name} @ level={level} → dropped={dropped}")
 
-        # brief recovery finetune (small budget)
         ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
         text_field = cfg.data.processing.text_field
 

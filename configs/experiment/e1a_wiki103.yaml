@@ -9,7 +9,7 @@ defaults:
       - crumpled_paper
 
 model_groups:
-  mlm: [roberta-base, bert-base-cased, distilroberta-base]
+  mlm: [roberta-base, bert-base-cased, distilroberta]
   ar: [gpt2, gpt2-medium, gpt2-large]
 
 stage1:
