@@ -1,10 +1,11 @@
+# lldc/compression/payload_codec/bitmask.py
+
 from __future__ import annotations
 from typing import Iterable, List
 import math
 
 
 def pack_bitmask(keep_flags: Iterable[bool]) -> bytes:
-    """Pack 1 bit per token; True=keep/unmasked, False=masked."""
     out = bytearray()
     byte, count = 0, 0
     for flag in keep_flags:

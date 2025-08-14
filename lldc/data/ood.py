@@ -1,6 +1,9 @@
+# lldc/data/ood.py
+
 from __future__ import annotations
 from pathlib import Path
 import random
+from datasets import load_dataset
 
 
 def synth_math(n: int, rnd: random.Random) -> list[str]:
@@ -19,8 +22,6 @@ def synth_code(n: int, rnd: random.Random) -> list[str]:
 
 def from_stack(n: int) -> list[str]:
     try:
-        from datasets import load_dataset
-
         ds = load_dataset(
             "bigcode/the-stack", data_dir="data/python", split="train[:2000]"
         )
@@ -38,8 +39,6 @@ def from_stack(n: int) -> list[str]:
 
 def from_math(n: int) -> list[str]:
     try:
-        from datasets import load_dataset
-
         ds = load_dataset("math_dataset", "all", split="train[:5000]")
         out = []
         for r in ds:

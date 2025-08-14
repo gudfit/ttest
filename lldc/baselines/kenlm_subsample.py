@@ -1,9 +1,11 @@
 # lldc/baselines/kenlm_subsample.py
+
 from __future__ import annotations
 from typing import Dict, List, Tuple
 from pathlib import Path
 from collections import Counter
 import os, subprocess
+import kenlm, math
 
 
 def _train_kenlm(sentences: List[str], order: int, workdir: str) -> Tuple[str, str]:
@@ -54,16 +56,12 @@ def _train_kenlm(sentences: List[str], order: int, workdir: str) -> Tuple[str, s
 
 
 def _load_kenlm(arpa_path: str, binary_path: str | None = None):
-    import kenlm
-
     if binary_path and Path(binary_path).exists():
         return kenlm.Model(binary_path)
     return kenlm.Model(arpa_path)
 
 
 def _build_vocab(docs: List[str], max_vocab: int = 50000) -> List[str]:
-    from collections import Counter
-
     cnt = Counter()
     for t in docs:
         cnt.update(t.split())
@@ -77,8 +75,6 @@ def _uniform_subsample_words(words: List[str], N: int) -> Tuple[List[str], List[
 
 
 def _state_from_context(model, ctx: List[str]):
-    import kenlm
-
     st = kenlm.State()
     model.BeginSentenceWrite(st)
     for w in ctx[-4:]:
@@ -166,8 +162,6 @@ def kenlm_ngram_bpc(
 ) -> float:
     arpa, binary = _train_kenlm(train_texts, order=order, workdir=workdir)
     lm = _load_kenlm(arpa, binary)
-    import kenlm, math
-
     total_log10 = 0.0
     total_chars = 0
     for t in test_texts:

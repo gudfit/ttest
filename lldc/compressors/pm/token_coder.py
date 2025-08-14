@@ -1,3 +1,5 @@
+# lldc/compressors/pm.py
+
 from __future__ import annotations
 from typing import List, Tuple
 import torch
@@ -7,14 +9,13 @@ import torch
 def encode_kept_stream_with_oracle(
     kept_text: str,
     oracle_tok,
-    oracle_model,  # AutoModelForCausalLM
+    oracle_model,
 ) -> tuple[List[int], List[List[float]], int]:
     """
     Walk kept tokens left→right.
     At step t:
       - record P(sym_t | sym_<t>) using KV cache (teacher-forced on kept-only stream),
       - then feed true sym_t to advance cache.
-    Return (symbols, probs_list, vocab_size).
     """
     device = next(oracle_model.parameters()).device
     vocab_size = int(getattr(oracle_model.config, "vocab_size", len(oracle_tok)))

@@ -1,3 +1,5 @@
+# lldc/decompression/vq_decompress.py
+
 from __future__ import annotations
 from typing import List, Optional
 import math
@@ -30,7 +32,7 @@ def reconstruct_tokens_from_indices(
     ln_f = transformer.ln_f
     head = lm.lm_head
 
-    codebook = model.vq.codebook  # [K,D]
+    codebook = model.vq.codebook
     D = codebook.size(1)
     L0 = len(indices)
     target_len = int(math.ceil(L0 * margin_factor))
@@ -44,7 +46,7 @@ def reconstruct_tokens_from_indices(
         idx_t = indices[t] if t < L0 else indices[-1]
         z_t = codebook[idx_t].view(1, 1, D).to(device)
         xq_list.append(z_t)
-        xq = torch.cat(xq_list, dim=1)  # [1,t+1,D]
+        xq = torch.cat(xq_list, dim=1)
         y = xq
         for i in range(model.layer_after, len(h)):
             y = h[i](y)[0] if isinstance(h[i](y), tuple) else h[i](y)

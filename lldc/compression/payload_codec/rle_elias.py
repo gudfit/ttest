@@ -1,3 +1,5 @@
+# lldc/compression/payload_codec/rle_elias.py
+
 from __future__ import annotations
 from typing import Iterable, List, Tuple
 
@@ -34,7 +36,6 @@ def elias_gamma_decode(bits: List[int], pos: int) -> Tuple[int, int]:
 
 
 def rle_runs(flags: Iterable[bool]) -> List[Tuple[int, int]]:
-    """Return [(symbol, run_len), ...] with symbol 0=masked, 1=kept; starts with first flag symbol."""
     runs: List[Tuple[int, int]] = []
     it = iter(flags)
     try:
@@ -59,10 +60,9 @@ def encode_rle_elias(flags: Iterable[bool]) -> bytes:
     bits: List[int] = []
     if not runs:
         return bytes()
-    bits.append(runs[0][0])  # starting symbol
+    bits.append(runs[0][0])
     for _, length in runs:
         bits.extend(elias_gamma_encode(max(1, length)))
-    # pack to bytes
     out = bytearray()
     byte = 0
     cnt = 0

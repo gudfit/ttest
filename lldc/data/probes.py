@@ -1,8 +1,12 @@
+# lldc/data/probes.py
+
 from __future__ import annotations
 import json, random, re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Dict, Any
+from datasets import load_dataset
+
 
 SPLIT_PATS = re.compile(r"(?<=[.!?])\s+")
 
@@ -39,10 +43,6 @@ def _mask_capital_spans(sent: str) -> Dict[str, str] | None:
 
 
 def generate_factual_probes(spec: ProbeSpec) -> Path:
-    try:
-        from datasets import load_dataset
-    except Exception as e:
-        raise RuntimeError(f"HuggingFace datasets not available: {e}")
     rnd = random.Random(spec.seed)
     ds = load_dataset(spec.dataset_name, spec.dataset_config)
     pool: List[Dict[str, str]] = []

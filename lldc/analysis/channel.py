@@ -1,9 +1,16 @@
+# lldc/analysis/channel.py
+
 from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Any
 import numpy as np
+import datasketch, torch
+import itertools
+from datasketch import MinHash
+from collections import Counter
+from sentence_transformers import SentenceTransformer
 
 from lldc.baselines.kenlm_subsample import subsample_and_reconstruct_kenlm5
 from lldc.metrics.crumpled_paper import Oracle, tcm_pcm_from_texts
@@ -22,7 +29,7 @@ class ChannelConfig:
     cand_per_step: int = 200
     max_vocab: int = 50000
     scales: List[int] = (1, 2, 4, 8)
-    Nc: int = 10000  # copies for amortised BPC
+    Nc: int = 10000
 
 
 def _load_recons(paths: List[Path]) -> List[dict]:
@@ -38,7 +45,6 @@ def _load_recons(paths: List[Path]) -> List[dict]:
 
 
 def _ngram_topk_coverage(texts: List[str], n: int, k: int) -> float:
-    from collections import Counter
 
     cnt = Counter()
     for t in texts:
@@ -54,23 +60,17 @@ def _ngram_topk_coverage(texts: List[str], n: int, k: int) -> float:
 
 def _semantic_minhash_stats(texts: List[str], perms: int, sbert_model: str) -> dict:
     try:
-        import datasketch, torch
-        from sentence_transformers import SentenceTransformer
 
         enc = SentenceTransformer(sbert_model)
         reps = enc.encode(texts, convert_to_tensor=True, show_progress_bar=False)
         reps = reps / reps.norm(dim=-1, keepdim=True)
         vs = reps.cpu().numpy()
-        from datasketch import MinHash
-
         sigs = []
         for v in vs:
             mh = MinHash(num_perm=perms)
             for x in v.tolist():
                 mh.update(bytes(f"{x:.5f}", "utf-8"))
             sigs.append(mh)
-        import itertools
-
         sims = [
             sigs[i].jaccard(sigs[j])
             for i, j in itertools.combinations(range(len(sigs)), 2)

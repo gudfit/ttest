@@ -1,13 +1,15 @@
+# lldc/eval/functional.py
+
 from __future__ import annotations
 from typing import List, Dict
 import numpy as np, torch
+from datasets import load_dataset
+import evaluate
 
 
 def evaluate_superglue_zero_shot(
     model, tok, tasks: List[str], n: int = 100, device="cuda"
 ) -> Dict:
-    from datasets import load_dataset
-
     model.to(device).eval()
     specs = {
         "rte": (
@@ -24,8 +26,6 @@ def evaluate_superglue_zero_shot(
         ),
         "boolq": ("super_glue", "boolq", ("passage", "question"), ["yes", "no"]),
     }
-    import evaluate
-
     macro = evaluate.load("f1", "multiclass")
     out_task, f1s = {}, []
     with torch.no_grad():
@@ -59,7 +59,7 @@ def evaluate_superglue_zero_shot(
                 elif t == "rte":
                     pred = 1 if "entail" in gen else 0
                     ref = int(ds[i]["label"])
-                else:  # cb
+                else:
                     if "entail" in gen:
                         pred = 0
                     elif "contrad" in gen:
