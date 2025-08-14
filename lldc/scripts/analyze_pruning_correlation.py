@@ -1,7 +1,7 @@
 # lldc/scripts/analyze_pruning_correlation.py
 
 from __future__ import annotations
-import json
+import json, math
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -9,6 +9,7 @@ import re
 import hydra
 import pandas as pd
 from scipy.stats import pearsonr
+from statsmodels.stats.power import TTestIndPower
 
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
@@ -113,6 +114,18 @@ def _pearson(x: pd.Series, y: pd.Series) -> Tuple[float, float]:
     return float(r), float(p)
 
 
+def _perform_power_analysis(effect_size=0.5, alpha=0.05, power=0.8) -> int:
+    analysis = TTestIndPower()
+    required_n = analysis.solve_power(
+        effect_size=effect_size,
+        alpha=alpha,
+        power=power,
+        ratio=1.0,
+        alternative="two-sided",
+    )
+    return int(math.ceil(required_n))
+
+
 @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
 def main(cfg: Any) -> None:
     log = setup_logging()
@@ -127,18 +140,27 @@ def main(cfg: Any) -> None:
     out_dir = paths.results / "pruning_correlation"
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_csv(out_dir / "raw_table.tsv", sep="\t", index=False)
+    required_sample_size = _perform_power_analysis(
+        effect_size=0.5, alpha=0.05, power=0.8
+    )
+    log.info(
+        f"[correlation] Required sample size for desired power (d=0.5, α=0.05, 1-β=0.8): n = {required_sample_size}"
+    )
 
     metrics = []
     for struct_col in ["tcm_bits", "pcm_bits"]:
         for func_col in ["glue_macro_f1", "factual_recall_bleurt"]:
             r, p = _pearson(df[struct_col], df[func_col])
+            actual_n = int(df[[struct_col, func_col]].dropna().shape[0])
             metrics.append(
                 {
                     "x_struct": struct_col,
                     "y_func": func_col,
                     "pearson_r": r,
                     "p_value": p,
-                    "n": int(df[[struct_col, func_col]].dropna().shape[0]),
+                    "n_actual": actual_n,
+                    "n_required_for_power": required_sample_size,
+                    "is_powered": bool(actual_n >= required_sample_size),
                 }
             )
 
@@ -157,7 +179,10 @@ def main(cfg: Any) -> None:
             plt.scatter(sub[x], sub[y], marker="o")
             plt.xlabel(x)
             plt.ylabel(y)
-            plt.title(f"{x} vs {y} (r={m['pearson_r']:.3f}, p={m['p_value']:.3g})")
+            plt.title(
+                f"{x} vs {y} (r={m['pearson_r']:.3f}, p={m['p_value']:.3g}, n={m['n_actual']}, "
+                f"powered={m['is_powered']})"
+            )
             plt.tight_layout()
             plt.savefig(out_dir / f"scatter_{x}_vs_{y}.png", dpi=170)
             plt.close()

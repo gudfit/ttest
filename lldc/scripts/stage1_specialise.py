@@ -33,6 +33,7 @@ class _Stage1Cfg:
     rate_start: float = 0.2
     rate_end: float = 0.8
     pll_token_scoring: bool = True
+    kl_target: float = 0.02
 
 
 def _read_s1_mask_cfg(cfg: Any) -> _Stage1Cfg:
@@ -58,6 +59,7 @@ def _read_s1_mask_cfg(cfg: Any) -> _Stage1Cfg:
             else 0.8
         ),
         pll_token_scoring=bool(getattr(m, "pll_token_scoring", True)) if m else True,
+        kl_target=float(getattr(m, "kl_target", 0.02)) if m else 0.02,
     )
 
 
@@ -164,6 +166,66 @@ def _compute_global_threshold_bits(
     return float(q)
 
 
+def _kl_divergence_bernoulli(p: float, q: float) -> float:
+    p = float(np.clip(p, 1e-9, 1 - 1e-9))
+    q = float(np.clip(q, 1e-9, 1 - 1e-9))
+    return p * math.log2(p / q) + (1 - p) * math.log2((1 - p) / (1 - q))
+
+
+@torch.no_grad()
+def _collect_surprisal_scores(
+    model, tok, ds_policy: Dataset, max_examples: int = 1000
+) -> List[float]:
+    device = next(model.parameters()).device
+    mask_id = int(tok.mask_token_id)
+    scores: List[float] = []
+    n = min(max_examples, len(ds_policy))
+    for i in range(n):
+        ids = torch.tensor(ds_policy[i]["input_ids"], dtype=torch.long, device=device)
+        ids = ids[: tok.model_max_length]
+        s = pll_surprisal_scores(ids, model, tok, mask_id)
+        scores.extend([float(x.item()) for x in s])
+    return scores
+
+
+@torch.no_grad()
+def _find_threshold_for_kl_target(
+    model,
+    tok,
+    ds_policy: Dataset,
+    prev_scores: List[float],
+    prev_threshold: float,
+    kl_target: float,
+    max_examples: int = 1000,
+) -> Tuple[float, float, List[float]]:
+    curr_scores = _collect_surprisal_scores(model, tok, ds_policy, max_examples)
+    if not curr_scores:
+        return 0.0, 0.0, curr_scores
+
+    cs = np.array(curr_scores, dtype=np.float32)
+    low, high = float(cs.min()), float(cs.max())
+
+    if prev_scores:
+        p_prev = float((np.array(prev_scores) <= float(prev_threshold)).mean())
+    else:
+        p_prev = 0.5
+
+    best = high
+    best_p = float((cs <= best).mean())
+    for _ in range(20):
+        mid = 0.5 * (low + high)
+        p_curr = float((cs <= mid).mean())
+        kl = _kl_divergence_bernoulli(p_curr, p_prev)
+        if kl <= kl_target:
+            best = mid
+            best_p = p_curr
+            high = mid
+        else:
+            low = mid
+
+    return float(best), float(best_p), curr_scores
+
+
 class PolicyRescoreCallback(TrainerCallback):
     def __init__(
         self,
@@ -172,32 +234,79 @@ class PolicyRescoreCallback(TrainerCallback):
         s1cfg: _Stage1Cfg,
         collator: AdaptiveMaskingCollator,
         max_examples: int = 600,
+        prev_scores: Optional[List[float]] = None,
+        prev_threshold: Optional[float] = None,
     ):
         self.tok = tokenizer
         self.ds_policy_tok = ds_policy_tok
         self.s1cfg = s1cfg
         self.collator = collator
         self.max_examples = max_examples
+        self.last_epoch_end_time = None
+        self.total_train_time = 0.0
+        self.prev_scores = list(prev_scores or [])
+        self.prev_threshold = (
+            float(prev_threshold)
+            if prev_threshold is not None
+            else float(collator.threshold_bits)
+        )
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        self.last_epoch_end_time = time.perf_counter()
 
     def on_epoch_begin(self, args, state, control, **kwargs):
         trainer = kwargs.get("trainer", None)
-        if trainer is None:
+        if trainer is None or not self.s1cfg.recompute_each_epoch:
             return
-        if not self.s1cfg.recompute_each_epoch:
-            return
-        epoch_idx = int(state.epoch) if state.epoch is not None else 0
-        num_epochs = int(args.num_train_epochs)
-        mask_rate = _linear_curriculum(
-            epoch_idx, num_epochs, self.s1cfg.rate_start, self.s1cfg.rate_end
+
+        epoch_duration_approx = time.perf_counter() - (
+            self.last_epoch_end_time or time.perf_counter()
         )
-        thresh = _compute_global_threshold_bits(
+
+        t0 = time.perf_counter()
+
+        if not self.prev_scores:
+            self.prev_scores = _collect_surprisal_scores(
+                trainer.model, self.tok, self.ds_policy_tok, self.max_examples
+            )
+            if not np.isfinite(self.prev_threshold):
+                self.prev_threshold = (
+                    float(np.median(self.prev_scores)) if self.prev_scores else 0.0
+                )
+
+        best_thresh, p_curr, curr_scores = _find_threshold_for_kl_target(
             trainer.model,
             self.tok,
             self.ds_policy_tok,
-            target_mask_rate=mask_rate,
+            prev_scores=self.prev_scores,
+            prev_threshold=self.prev_threshold,
+            kl_target=self.s1cfg.kl_target,
             max_examples=self.max_examples,
         )
-        self.collator.update_policy(threshold_bits=thresh, mask_rate=mask_rate)
+
+        t1 = time.perf_counter()
+        rescore_duration = t1 - t0
+
+        if (
+            self.total_train_time > 0
+            and epoch_duration_approx > 0
+            and (rescore_duration / max(epoch_duration_approx, 1e-6)) > 0.10
+        ):
+            logging.getLogger("lldc").warning(
+                f"[Callback] Policy rescoring took {rescore_duration:.2f}s, "
+                f">10% of estimated epoch time ({epoch_duration_approx:.2f}s). Skipping update."
+            )
+            return
+
+        self.collator.update_policy(threshold_bits=best_thresh, mask_rate=p_curr)
+        self.prev_scores = curr_scores
+        self.prev_threshold = best_thresh
+
+    def on_epoch_end(self, args, state, control, **kwargs):
+        now = time.perf_counter()
+        if self.last_epoch_end_time is not None:
+            self.total_train_time += now - self.last_epoch_end_time
+        self.last_epoch_end_time = now
 
 
 def _tokenize_dataset(
@@ -291,8 +400,10 @@ def main() -> None:
             tok, model, threshold_bits=init_thresh, mask_rate=s1cfg.rate_start
         )
 
+        init_prev_scores = _collect_surprisal_scores(model, tok, ds_policy_tok, 600)
+
         args = TrainingArguments(
-            output_dir=str(paths.checkpoints / f"{model_name}_stage1_seed{seed}"),
+            output_dir=str(Paths().checkpoints / f"{model_name}_stage1_seed{seed}"),
             per_device_train_batch_size=cfg.data.loader.batch_size or 8,
             per_device_eval_batch_size=cfg.data.loader.batch_size or 8,
             gradient_accumulation_steps=cfg.compute.gradient_accumulation or 1,
@@ -324,7 +435,17 @@ def main() -> None:
             tokenizer=tok,
         )
 
-        trainer.add_callback(PolicyRescoreCallback(tok, ds_policy_tok, s1cfg, collator))
+        trainer.add_callback(
+            PolicyRescoreCallback(
+                tok,
+                ds_policy_tok,
+                s1cfg,
+                collator,
+                max_examples=600,
+                prev_scores=init_prev_scores,
+                prev_threshold=init_thresh,
+            )
+        )
 
         run = wandb_log.start(
             cfg,

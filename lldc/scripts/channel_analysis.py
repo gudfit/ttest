@@ -3,9 +3,10 @@
 from __future__ import annotations
 from typing import Any, List, Dict, Tuple, Iterable
 from collections import Counter, defaultdict
-import math, json, random
+import math, json, random, logging
 import numpy as np
 from sentence_transformers import SentenceTransformer
+from datasketch import MinHash, MinHashLSH  # NEW
 
 from lldc.utils.logging import setup_logging
 from lldc.metrics.fidelity import character_level_fidelity
@@ -42,25 +43,48 @@ def semantic_dedup_coverage(
     texts: List[str],
     model_name: str = "sentence-transformers/all-mpnet-base-v2",
     thr: float = 0.9,
+    num_perm: int = 256,
 ) -> float:
+    log = logging.getLogger("lldc")
     if len(texts) < 2:
         return 0.0
+
+    log.info(f"[semantic_dedup] Encoding {len(texts)} texts with {model_name}...")
     enc = SentenceTransformer(model_name)
-    idx = list(range(len(texts)))
-    pairs = [
-        (random.randrange(len(idx)), random.randrange(len(idx)))
-        for _ in range(min(2000, len(texts) * 5))
-    ]
     embs = enc.encode(
         texts, convert_to_numpy=True, show_progress_bar=False, normalize_embeddings=True
     )
-    dup = 0
-    for a, b in pairs:
-        if a == b:
-            continue
-        if float((embs[a] * embs[b]).sum()) >= thr:
-            dup += 1
-    return 100.0 * dup / max(1, len(pairs))
+
+    log.info("[semantic_dedup] Creating MinHash signatures...")
+    minhashes = []
+    for vec in embs:
+        m = MinHash(num_perm=num_perm)
+        for i, val in enumerate(vec):
+            if val > 0:
+                m.update(f"dim_{i}_pos".encode("utf8"))
+            else:
+                m.update(f"dim_{i}_neg".encode("utf8"))
+        minhashes.append(m)
+
+    lsh = MinHashLSH(threshold=(1 + thr) / 2, num_perm=num_perm)
+    for i, m in enumerate(minhashes):
+        lsh.insert(f"doc_{i}", m)
+
+    log.info("[semantic_dedup] Querying LSH index for duplicates...")
+    duplicate_pairs = set()
+    for i, m in enumerate(minhashes):
+        result = lsh.query(m)
+        for res_key in result:
+            j = int(res_key.split("_")[1])
+            if i < j:
+                cosine_sim = float((embs[i] * embs[j]).sum())
+                if cosine_sim >= thr:
+                    duplicate_pairs.add((i, j))
+
+    total_possible_pairs = len(texts) * (len(texts) - 1) / 2
+    if total_possible_pairs == 0:
+        return 0.0
+    return 100.0 * len(duplicate_pairs) / max(1, total_possible_pairs)
 
 
 class KN5:

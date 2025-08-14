@@ -6,6 +6,7 @@ from typing import Any, List, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import logging
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -17,6 +18,55 @@ from datasets import load_dataset
 from lldc.models.vq.vq_bottleneck import VQBottleneckWrapper
 import json
 from pathlib import Path
+
+
+def _select_memory_appropriate_model(
+    model_name: str, task_gb_requirement: float = 15.0
+) -> str:
+    if not torch.cuda.is_available():
+        return model_name
+
+    FALLBACK_CHAINS = {
+        "gpt2": ["gpt2", "gpt2-medium", "gpt2-large"],
+    }
+    MODEL_MEMORY_REQ_GB = {
+        "gpt2-large": 14.5,
+        "gpt2-medium": 7.0,
+        "gpt2": 3.5,
+    }
+
+    family = None
+    for k in FALLBACK_CHAINS:
+        if k in model_name:
+            family = k
+            break
+    if not family:
+        return model_name
+
+    available_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    chain = FALLBACK_CHAINS[family]
+    try:
+        start_index = chain.index(model_name)
+    except ValueError:
+        return model_name
+
+    for i in range(start_index, -1, -1):
+        cand = chain[i]
+        need = MODEL_MEMORY_REQ_GB.get(cand, float("inf"))
+        if need <= available_gb:
+            if cand != model_name:
+                logging.getLogger("lldc").warning(
+                    f"[VQ] '{model_name}' needs ~{MODEL_MEMORY_REQ_GB.get(model_name, 'N/A')}GB VRAM; "
+                    f"available={available_gb:.1f}GB. Falling back to '{cand}'."
+                )
+            return cand
+
+    smallest = chain[0]
+    logging.getLogger("lldc").error(
+        f"[VQ] Even smallest '{smallest}' needs ~{MODEL_MEMORY_REQ_GB.get(smallest, 'N/A')}GB; "
+        f"available={available_gb:.1f}GB. Aborting."
+    )
+    raise MemoryError("Insufficient GPU memory for any model in the family.")
 
 
 def save_vq_wrapper(model: VQBottleneckWrapper, out_dir: Path, meta: dict):
@@ -73,10 +123,12 @@ def train_vq_joint(
     epochs: int = 2,
     beta: float = 0.25,
 ) -> Tuple[VQBottleneckWrapper, AutoTokenizer]:
-    tok = AutoTokenizer.from_pretrained(base_model_name)
+    safe_name = _select_memory_appropriate_model(base_model_name)
+
+    tok = AutoTokenizer.from_pretrained(safe_name)
     if tok.pad_token is None and tok.eos_token:
         tok.pad_token = tok.eos_token
-    base = AutoModelForCausalLM.from_pretrained(base_model_name)
+    base = AutoModelForCausalLM.from_pretrained(safe_name)
     model = VQBottleneckWrapper(
         base, layer_after=layer_after, codebook_size=codebook_size, beta=beta
     )
@@ -92,7 +144,7 @@ def train_vq_joint(
     collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=False)
 
     args = TrainingArguments(
-        output_dir=f"artifacts/checkpoints/vq_{base_model_name}_K{codebook_size}",
+        output_dir=f"artifacts/checkpoints/vq_{safe_name}_K{codebook_size}",
         per_device_train_batch_size=2,
         per_device_eval_batch_size=2,
         learning_rate=lr,

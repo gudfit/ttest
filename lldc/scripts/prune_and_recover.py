@@ -16,6 +16,8 @@ from transformers import (
 )
 from lldc.utils.logging import setup_logging
 from lldc.utils.hydra_utils import resolve_auto
+
+# noqa: E402
 from lldc.utils.paths import Paths
 from lldc.models.specialization import structured_prune
 
@@ -92,10 +94,17 @@ def main():
 
         ds = ds.map(tok_fn, batched=True, remove_columns=[text_field])
         collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=(arch == "mlm"))
+
+        recovery_epochs = _cfg_get(
+            cfg,
+            "e2a.recovery.finetune_epochs",
+            _cfg_get(cfg, "experiment.e2a.recovery.finetune_epochs", 3),
+        )
+
         args = TrainingArguments(
             output_dir=str(paths.checkpoints / f"{model_name}_pruned_{level}"),
             per_device_train_batch_size=2,
-            num_train_epochs=1,
+            num_train_epochs=int(recovery_epochs),
             learning_rate=5e-5,
             bf16=torch.cuda.is_available(),
             evaluation_strategy="no",

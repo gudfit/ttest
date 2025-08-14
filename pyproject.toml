@@ -30,6 +30,8 @@ dependencies = [
   "hydra-core",
   "bitsandbytes; platform_system == 'Linux'",
   "wandb>=0.21.1",
+  "datasketch", 
+  "statsmodels",
 ]
 
 [project.optional-dependencies]
