@@ -5,7 +5,7 @@ from typing import Any, List, Dict, Tuple
 import json
 from pathlib import Path
 import time
-
+import hydra
 import numpy as np
 import torch
 from datasets import load_dataset
@@ -97,8 +97,6 @@ def _decode_indices_arithmetic_cpu(
 
 
 def main():
-    import hydra
-
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()

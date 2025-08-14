@@ -1,7 +1,7 @@
 # lldc/scripts/sweeps.py
 
 from __future__ import annotations
-
+import hydra
 from typing import Any, List
 from pathlib import Path
 import importlib
@@ -83,8 +83,6 @@ def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
 
 
 def main() -> None:
-    import hydra
-
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()

@@ -1,8 +1,11 @@
+# lldc/metrics/crumpled_paper.py
+
 from __future__ import annotations
 import math
 from dataclasses import dataclass
 from typing import List, Tuple, Dict
 import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
 @dataclass
@@ -11,8 +14,6 @@ class Oracle:
     device: str = "cuda"
 
     def __post_init__(self):
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-
         self.tok = AutoTokenizer.from_pretrained(self.name)
         self.m = AutoModelForCausalLM.from_pretrained(self.name).to(self.device).eval()
         self.vocab_size = int(getattr(self.m.config, "vocab_size", len(self.tok)))
@@ -23,12 +24,10 @@ class Oracle:
             self.device
         )
         ids = enc["input_ids"][0]  # [L]
-        # teacher-force causal Xent; per-token surprisal in bits
         out = self.m(input_ids=ids.unsqueeze(0), labels=ids.unsqueeze(0))
-        # out.loss is mean; we want tokenwise:
-        logits = self.m(input_ids=ids.unsqueeze(0)).logits[0]  # [L,V]
+        logits = self.m(input_ids=ids.unsqueeze(0)).logits[0]
         probs = torch.softmax(logits, dim=-1)
-        ps = probs[torch.arange(ids.size(0)), ids].clamp_min(1e-12)  # [L]
+        ps = probs[torch.arange(ids.size(0)), ids].clamp_min(1e-12)
         s_bits = (-torch.log2(ps)).tolist()
         return ids.tolist(), [float(x) for x in s_bits]
 
@@ -40,7 +39,6 @@ def _needleman_wunsch_cost(
     Align two surprisal sequences with global NW:
       - match/mismatch cost = |a_s[i] - b_s[j]|
       - gap cost = gap_cost per gap symbol
-    Returns (total_cost, path) where path is list of (i or -1, j or -1).
     """
     n, m = len(a_s), len(b_s)
     dp = [[0.0] * (m + 1) for _ in range(n + 1)]
@@ -66,18 +64,17 @@ def _needleman_wunsch_cost(
             )
             dp[i][j], bt[i][j] = best
 
-    # backtrack to path of (i index or -1 for gap, j index or -1)
     path: List[Tuple[int, int]] = []
     i, j = n, m
     while i > 0 or j > 0:
         pi, pj = bt[i][j]
-        if pi == i - 1 and pj == j - 1:  # sub/match
+        if pi == i - 1 and pj == j - 1:
             path.append((i - 1, j - 1))
             i, j = pi, pj
-        elif pi == i - 1 and pj == j:  # deletion in b  (a aligned to gap)
+        elif pi == i - 1 and pj == j:
             path.append((i - 1, -1))
             i, j = pi, pj
-        else:  # insertion in b (gap aligned to b)
+        else:
             path.append((-1, j - 1))
             i, j = pi, pj
     path.reverse()
@@ -85,7 +82,6 @@ def _needleman_wunsch_cost(
 
 
 def tcm_pcm_from_texts(orig: str, recon: str, oracle: Oracle) -> Dict[str, float]:
-    # single measurement tokenizer: oracle tokenizer for both strings
     _, s0 = oracle.surprisal_bits(orig)
     _, s1 = oracle.surprisal_bits(recon)
     return tcm_pcm_from_surprisal(s0, s1, vocab_size=oracle.vocab_size)
@@ -96,7 +92,6 @@ def tcm_pcm_from_surprisal(
 ) -> Dict[str, float]:
     gap = math.log2(max(2, vocab_size))
     _, path = _needleman_wunsch_cost(s0, s1, gap_cost=gap)
-    # accumulate per-column cost along alignment path
     tcm = 0.0
     pcm = 0.0
     for i, j in path:

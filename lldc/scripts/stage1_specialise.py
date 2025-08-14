@@ -1,8 +1,11 @@
 # lldc/scripts/stage1_specialise.py
+
 from __future__ import annotations
 import os, json, logging, math, time
 from dataclasses import dataclass
 from typing import Any, List, Tuple, Optional
+import hydra
+from omegaconf import OmegaConf
 import numpy as np
 import torch
 from transformers import (
@@ -212,9 +215,6 @@ def _tokenize_dataset(
 
 
 def main() -> None:
-    import hydra
-    from omegaconf import OmegaConf
-
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()

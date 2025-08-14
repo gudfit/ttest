@@ -6,7 +6,9 @@ from collections import Counter, defaultdict
 import math, json, random
 import numpy as np
 from sentence_transformers import SentenceTransformer
+
 from lldc.utils.logging import setup_logging
+from lldc.metrics.fidelity import character_level_fidelity
 
 
 def _cfg_get(cfg: Any, dotted: str, default=None):
@@ -194,7 +196,6 @@ def run_channel_analysis(
             recon_texts, n, top_k
         )
     cov["semantic_dup_pct"] = semantic_dedup_coverage(recon_texts, sbert_model)
-
     regen_Ns = list(
         _cfg_get(
             cfg,
@@ -202,12 +203,8 @@ def run_channel_analysis(
             _cfg_get(cfg, "experiment.regen_baseline.subsample_every_N", []),
         )
     )
-
-    from lldc.metrics.fidelity import character_level_fidelity
-
     base_scores = {}
     unigram_fill = _most_common_token(orig_texts)
-
     for N in regen_Ns:
         if kn5 is None:
             recon_b = [

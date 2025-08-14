@@ -1,5 +1,8 @@
+# lldc/utils/wandb_utils.py
+
 from __future__ import annotations
 from typing import Any, Dict, Iterable, Optional
+import wandb
 
 
 def init_wandb(
@@ -15,8 +18,6 @@ def init_wandb(
         wb = getattr(wb_cfg, "wandb", None)
         if wb is None or not getattr(wb, "enabled", False):
             return None
-        import wandb
-
         project = getattr(wb, "project", "lldc")
         entity = getattr(wb, "entity", None)
         mode = "online" if getattr(wb, "online", True) else "offline"
@@ -42,8 +43,6 @@ def log_metrics(wb, step: int | None = None, **kwargs):
 def log_artifact_file(wb, path: str, name: str, type_: str = "artifact"):
     if wb is None:
         return
-    import wandb
-
     art = wandb.Artifact(name, type=type_)
     art.add_file(path, name=name.split("/")[-1])
     wb.log_artifact(art)

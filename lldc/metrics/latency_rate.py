@@ -1,4 +1,5 @@
 # lldc/metrics/latency_rate.py
+
 from __future__ import annotations
 
 from typing import Dict, List, Tuple
@@ -30,7 +31,6 @@ def aggregate_cpu_decode_ms_from_payloads(payload_root: Path) -> Dict[str, float
     all_vals: List[float] = []
     pm_vals: List[float] = []
     vq_vals: List[float] = []
-
     for rp in payload_root.glob("*/recons.jsonl"):
         vals = _scan_one(rp)
         all_vals.extend(vals)
@@ -94,11 +94,9 @@ def _default_seq_len(model) -> int:
 def estimate_transformer_flops_per_token(model, seq_len: int | None = None) -> float:
     n_layer, d_model, d_ff, _ = _get_transformer_dims(model)
     L = int(seq_len or _default_seq_len(model))
-
     proj_flops = 4.0 * d_model * d_model
     attn_mix = 2.0 * L * d_model
     mlp_flops = 2.0 * d_model * d_ff
-
     flops_per_token_per_layer = proj_flops + attn_mix + mlp_flops
     total = float(n_layer) * flops_per_token_per_layer
     return float(total)
@@ -107,10 +105,8 @@ def estimate_transformer_flops_per_token(model, seq_len: int | None = None) -> f
 def estimate_transformer_flops_per_seq(model, seq_len: int) -> float:
     n_layer, d_model, d_ff, _ = _get_transformer_dims(model)
     L = int(seq_len)
-
     proj_seq = 4.0 * L * d_model * d_model
     attn_seq = 2.0 * (L**2) * d_model
     mlp_seq = 2.0 * L * d_model * d_ff
-
     per_layer = proj_seq + attn_seq + mlp_seq
     return float(n_layer) * per_layer

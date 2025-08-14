@@ -1,8 +1,10 @@
 # lldc/scripts/measure_latency_flops.py
+
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
+import hydra
 import json
 import time
 import math
@@ -73,8 +75,6 @@ def _time_encode_gpu(
 
 
 def main():
-    import hydra
-
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()

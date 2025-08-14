@@ -1,10 +1,15 @@
 # lldc/scripts/evaluate_all.py
+
 from __future__ import annotations
+import hydra
+import numpy as np
+import matplotlib.pyplot as plt
 import json, re, math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Set, DefaultDict
 from collections import defaultdict
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
@@ -328,8 +333,6 @@ def _amortised_bpc(
 def _export_amortised_curves(
     out_dir: Path, methods: Dict[str, float], static_bits: int, base_chars: int
 ) -> None:
-    import numpy as np
-
     Ns = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000]
     scales = [1, 2, 4, 8, 16, 32]
     curves = []
@@ -348,8 +351,6 @@ def _export_amortised_curves(
                 )
     (out_dir / "amortised_bpc_curves.json").write_text(json.dumps(curves, indent=2))
     try:
-        import matplotlib.pyplot as plt
-
         plt.figure()
         for name, bpc in methods.items():
             y = [_amortised_bpc(bpc, static_bits, base_chars, n, 1) for n in Ns]
@@ -471,8 +472,6 @@ def _export_unified_rd(points_pm_vq: List[RDPoint], paths: Paths) -> None:
     (out_dir / "rd_points_all.json").write_text(json.dumps(unified, indent=2))
 
     try:
-        import matplotlib.pyplot as plt
-
         plt.figure()
         seen_labels = set()
         for rec in unified:
@@ -509,8 +508,6 @@ def _export_unified_rd(points_pm_vq: List[RDPoint], paths: Paths) -> None:
 
 
 def main():
-    import hydra
-
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()
@@ -543,8 +540,6 @@ def main():
         (paths.results / "rd_aggregates.json").write_text(json.dumps(agg, indent=2))
 
         try:
-            from transformers import AutoTokenizer, AutoModelForCausalLM
-
             ds = __import__("datasets").load_dataset(
                 cfg.data.source.hf_dataset, cfg.data.source.hf_config
             )

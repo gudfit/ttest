@@ -1,7 +1,9 @@
 # lldc/scripts/prune_and_recover.py
+
 from __future__ import annotations
 from typing import Any
 from pathlib import Path
+import hydra
 import torch
 from datasets import load_dataset
 from transformers import (
@@ -36,8 +38,6 @@ def _arch_from_name(name: str) -> str:
 
 
 def main():
-    import hydra
-
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()

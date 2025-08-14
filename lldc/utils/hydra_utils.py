@@ -1,13 +1,13 @@
+# lldc/utils/hydra_utils.py
+
 from __future__ import annotations
 from typing import Any
+import torch
 import math
 
 
 def auto_dtype(hardware_name: str | None = None) -> str:
-    # H100 → bf16; V100/T4/A100 → fp16; CPU → fp32
     try:
-        import torch
-
         if not torch.cuda.is_available():
             return "fp32"
         cap = torch.cuda.get_device_capability()

@@ -1,6 +1,9 @@
+# lldc/scripts/run_channel_e2b.py
+
 from __future__ import annotations
 from typing import Any, List, Dict
 import json
+import hydra
 from pathlib import Path
 from datasets import load_dataset
 from lldc.utils.logging import setup_logging
@@ -23,8 +26,6 @@ def _load_recons(paths: List[Path]) -> List[Dict]:
 
 
 def main():
-    import hydra
-
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()

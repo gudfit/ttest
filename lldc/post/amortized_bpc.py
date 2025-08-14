@@ -1,3 +1,5 @@
+# lldc/post/amortised_bpc.py
+
 from __future__ import annotations
 import json, math
 from pathlib import Path
@@ -20,7 +22,7 @@ def write_breakeven_table(
     static_bits: int,
     test_chars_hint: int,
     pm_points_json: Path,
-    baselines: List[Tuple[str, float]],  # (name, bpc_ref)
+    baselines: List[Tuple[str, float]],
 ) -> Path | None:
     out_dir.mkdir(parents=True, exist_ok=True)
     if not pm_points_json.exists() or not baselines:

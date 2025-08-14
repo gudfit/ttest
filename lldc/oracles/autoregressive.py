@@ -1,8 +1,11 @@
+# lldc/oracles/autoregressive.py
+
 from __future__ import annotations
 from typing import List
 import torch
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import math
 
 
 class AROracle:
@@ -27,16 +30,13 @@ class AROracle:
         probs = F.softmax(logits, dim=-1)
         return probs.tolist()
 
-    @torch.no_grad()  # Error was here: removed the extra '}'
+    @torch.no_grad()
     def surprisal_bits_for_text(self, text: str) -> List[float]:
-        """Next-token surprisal (bits) along text, using causal shifting."""
-        import math
-
         toks = self.tokenizer(text, return_tensors="pt")
         input_ids = toks["input_ids"].to(self.model.device)
-        logits = self.model(input_ids=input_ids).logits[0]  # [T,V]
-        logp = F.log_softmax(logits[:-1], dim=-1)  # predict x_{t+1}
-        true_next = input_ids[0, 1:].unsqueeze(-1)  # [T-1,1]
-        nats = -logp.gather(-1, true_next).squeeze(-1)  # [T-1]
+        logits = self.model(input_ids=input_ids).logits[0]
+        logp = F.log_softmax(logits[:-1], dim=-1)
+        true_next = input_ids[0, 1:].unsqueeze(-1)
+        nats = -logp.gather(-1, true_next).squeeze(-1)
         bits = (nats / math.log(2.0)).tolist()
         return [float(x) for x in bits]

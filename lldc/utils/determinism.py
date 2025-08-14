@@ -1,6 +1,9 @@
+# lldc/utils/determinism.py
+
 from __future__ import annotations
 import os, random
 import numpy as np
+import torch
 
 
 def set_determinism(seed: int, cudnn_benchmark: bool = False, allow_tf32: bool = True):
@@ -8,8 +11,6 @@ def set_determinism(seed: int, cudnn_benchmark: bool = False, allow_tf32: bool =
     random.seed(seed)
     np.random.seed(seed)
     try:
-        import torch
-
         torch.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
         torch.use_deterministic_algorithms(True, warn_only=True)

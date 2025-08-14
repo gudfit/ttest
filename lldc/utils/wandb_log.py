@@ -1,5 +1,12 @@
 # lldc/utils/wandb_log.py
+
 from __future__ import annotations
+
+try:
+    import wandb as _wandb
+    from omegaconf import OmegaConf
+except Exception:
+    _wandb = None
 
 
 def _cfg_get(cfg, path, default=None):
@@ -11,12 +18,6 @@ def _cfg_get(cfg, path, default=None):
     return default if cur is None else cur
 
 
-try:
-    import wandb as _wandb
-except Exception:
-    _wandb = None
-
-
 def start(cfg, run_name: str, tags=None):
     enabled = bool(_cfg_get(cfg, "logging.wandb.enabled", False))
     if not enabled or _wandb is None:
@@ -25,8 +26,6 @@ def start(cfg, run_name: str, tags=None):
     entity = _cfg_get(cfg, "logging.wandb.entity", None)
     config = None
     try:
-        from omegaconf import OmegaConf
-
         config = OmegaConf.to_container(cfg, resolve=True)
     except Exception:
         pass

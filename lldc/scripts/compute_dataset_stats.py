@@ -1,4 +1,5 @@
 # lldc/scripts/compute_dataset_stats.py
+
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,6 +8,9 @@ from typing import Any, Iterable, List, Dict, Optional
 import json
 import math
 import itertools
+import hydra
+from omegaconf import OmegaConf
+from datasets import load_dataset
 
 from lldc.utils.paths import Paths
 from lldc.utils.logging import setup_logging
@@ -75,16 +79,10 @@ def _safe_list(ds_split, text_field: str, limit: Optional[int] = None) -> List[s
 
 
 def main():
-    import hydra
-    from omegaconf import OmegaConf
-
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()
         paths = Paths().ensure()
-
-        from datasets import load_dataset
-
         ds_name = cfg.data.source.hf_dataset
         ds_cfg = getattr(cfg.data.source, "hf_config", None)
         tf = cfg.data.processing.text_field

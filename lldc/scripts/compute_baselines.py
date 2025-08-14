@@ -1,4 +1,6 @@
 # lldc/scripts/compute_baselines.py
+
+import hydra
 from __future__ import annotations
 from typing import Any, Dict, List
 import json, os, subprocess, tempfile, time
@@ -28,8 +30,6 @@ def _try_run(cmd: List[str]) -> tuple[bool, float, str]:
 
 
 def main():
-    import hydra
-
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()
@@ -100,7 +100,7 @@ def main():
             results["cmix"] = {"status": f"unavailable or error: {e}"}
 
         try:
-            import deepzip  # type: ignore
+            import deepzip
 
             # NOTE: This is a placeholder; actual DeepZip usage depends on package API.
             # We record unavailability gracefully if import fails.

@@ -1,4 +1,5 @@
 # lldc/scripts/rd_collect_and_plot.py
+
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -101,7 +102,6 @@ def _extract_xy(
 def plot_rd(metric: str = "charF", out_png: Path | None = None) -> Path:
     pts = _load_points()
     ent = _find_entropy_line()
-
     fig, ax = plt.subplots()
     for name, color, marker in [("PM", None, "o"), ("VQ", None, "s")]:
         X, Y, _ = _extract_xy(pts[name], metric)
@@ -122,15 +122,12 @@ def plot_rd(metric: str = "charF", out_png: Path | None = None) -> Path:
     X, Y, _ = _extract_xy(pts["AR"], metric)
     if X:
         ax.scatter(X, Y, marker="x", label="AR")
-
     ax.set_xlabel("Bits per Character (BPC)")
     ax.set_ylabel(f"Distortion (1 - {metric})")
     ax.set_title("Rate–Distortion (all methods)")
     ax.grid(True, linestyle="--", alpha=0.4)
-
     if ent is not None:
         ax.axvline(ent, linestyle=":", label=f"entropy ~ {ent:.3f} bpc")
-
     handles, labels = ax.get_legend_handles_labels()
     seen, H, L = set(), [], []
     for h, l in zip(handles, labels):
@@ -140,7 +137,6 @@ def plot_rd(metric: str = "charF", out_png: Path | None = None) -> Path:
         H.append(h)
         L.append(l)
     ax.legend(H, L, loc="best")
-
     out_png = out_png or (RESULTS / f"rd_plot_{metric}.png")
     fig.tight_layout()
     fig.savefig(out_png, dpi=180)
