@@ -6,7 +6,12 @@ import json, math, time
 
 import torch
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
+from transformers import (
+    AutoTokenizer,
+    AutoModelForMaskedLM,
+    AutoModelForCausalLM,
+    AutoModelForMaskedLM as _AutoMLM,
+)
 
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
@@ -20,7 +25,11 @@ from lldc.metrics.fidelity import (
     bertscore_f1,
     semantic_span_fidelity,
 )
-from lldc.metrics.crumpled_paper import Oracle as AROracle, tcm_pcm_from_surprisal
+from lldc.metrics.crumpled_paper import (
+    OracleEnsemble,
+    tcm_pcm_from_surprisal,
+    delta_log_likelihood_bits,
+)
 
 from lldc.compression.predictive_masking import pll_surprisal_scores
 from lldc.compression.masking_policies import choose_mask
@@ -237,7 +246,22 @@ def main():
                 "Fast tokenizers required for offset mapping alignment (MLM & oracle)."
             )
         oracle = AutoModelForCausalLM.from_pretrained(oracle_name).to(device).eval()
-        cp_oracle = AROracle(oracle_name, device=device)
+
+        ensemble_list = list(
+            _cfg_get(cfg, "crumpled_paper.oracle_models", [oracle_name])
+        )
+        measuring_tok_cfg = _cfg_get(
+            cfg, "crumpled_paper.measuring_tokenizer", "oracle"
+        )
+        cp_ensemble = OracleEnsemble(
+            model_names=ensemble_list,
+            device=device,
+            measuring_tokenizer=measuring_tok_cfg,
+        )
+
+        bi_name = _cfg_get(cfg, "crumpled_paper.delta_ll_model", "roberta-large")
+        bi_tok = AutoTokenizer.from_pretrained(bi_name)
+        bi_m = _AutoMLM.from_pretrained(bi_name).to(device).eval()
 
         ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
         split = ds[cfg.data.source.split_map.test]
@@ -286,6 +310,7 @@ def main():
                 sem_scores: List[float] = []
                 tcm_vals: List[float] = []
                 pcm_vals: List[float] = []
+                dll_vals: List[float] = []
                 cpu_decode_ms: List[float] = []
 
                 for doc_id, example in enumerate(split):
@@ -367,13 +392,21 @@ def main():
                     sem_scores.append(sspan)
 
                     if doc_id % 10 == 0:
-                        s_orig = cp_oracle.surprisal_bits(text)[1]
-                        s_rec = cp_oracle.surprisal_bits(recon_text)[1]
+                        s_orig = cp_ensemble.surprisal_bits(text)[1]
+                        s_rec = cp_ensemble.surprisal_bits(recon_text)[1]
                         m = tcm_pcm_from_surprisal(
-                            s_orig, s_rec, vocab_size=len(oracle_tok)
+                            s_orig, s_rec, vocab_size=cp_ensemble.vocab_size
                         )
                         tcm_vals.append(float(m["tcm_bits"]))
                         pcm_vals.append(float(m["pcm_bits"]))
+
+                        try:
+                            dll = delta_log_likelihood_bits(
+                                text, recon_text, bi_m, bi_tok
+                            )
+                            dll_vals.append(float(dll))
+                        except Exception:
+                            pass
 
                     with open(dump_path, "a", encoding="utf-8") as f:
                         f.write(
@@ -395,6 +428,11 @@ def main():
                                     "bertscore_f1": bF1,
                                     "semantic_span_fid": sspan,
                                     "cpu_decode_ms": pos_decode_ms + token_decode_ms,
+                                    "delta_ll_bits": (
+                                        (dll_vals[-1] if dll_vals else None)
+                                        if (doc_id % 10 == 0)
+                                        else None
+                                    ),
                                 },
                                 ensure_ascii=False,
                             )
@@ -426,6 +464,9 @@ def main():
                 pcm_point = (
                     float(sum(pcm_vals) / max(1, len(pcm_vals))) if pcm_vals else 0.0
                 )
+                dll_point = (
+                    float(sum(dll_vals) / max(1, len(dll_vals))) if dll_vals else 0.0
+                )
                 cpu_decode_mean = float(sum(cpu_decode_ms) / max(1, len(cpu_decode_ms)))
 
                 all_bpc.append(bpc)
@@ -443,6 +484,7 @@ def main():
                     "sem_span_fid_mean": sem_point,
                     "tcm_mean": tcm_point,
                     "pcm_mean": pcm_point,
+                    "delta_ll_bits_mean": dll_point,
                     "cpu_decode_ms_mean": cpu_decode_mean,
                     "bits_per_original_token": bits_per_original_token,
                 }
@@ -463,6 +505,7 @@ def main():
                         "pm/sem_span_fid": float(sem_point),
                         "pm/tcm": float(tcm_point),
                         "pm/pcm": float(pcm_point),
+                        "pm/delta_ll_bits": float(dll_point),
                         "pm/cpu_decode_ms_mean": float(cpu_decode_mean),
                     }
                 )
