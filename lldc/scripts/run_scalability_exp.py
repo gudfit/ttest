@@ -8,8 +8,7 @@ from pathlib import Path
 import hydra
 import torch
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
-
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
 from lldc.utils.hydra_utils import resolve_auto
@@ -24,25 +23,25 @@ from lldc.compression.token_alignment import (
     kept_char_spans_from_offsets,
     select_oracle_token_ids_from_spans,
 )
-
+from lldc.compressors.pm.token_coder import encode_kept_stream_with_oracle
+from lldc.metrics.fidelity import character_level_fidelity
+from lldc.metrics.crumpled_paper import OracleEnsemble, tcm_pcm_from_texts
 from lldc.models.vq.vq_trainer import (
     train_vq_joint,
     encode_indices,
     train_index_lm,
     cross_entropy_bits_index_stream,
 )
-from lldc.metrics.fidelity import character_level_fidelity
-from lldc.metrics.crumpled_paper import OracleEnsemble, tcm_pcm_from_texts
 
 
-def _position_codec(bits_keep):
-    n = len(bits_keep)
-    keep_frac = sum(bits_keep) / max(1, n)
+def _position_codec(flags: List[bool]) -> Tuple[str, bytes, int]:
+    n = len(flags)
+    keep_frac = (sum(1 for f in flags if f) / max(1, n)) if n > 0 else 0.0
     if keep_frac <= 0.25 or keep_frac >= 0.75:
-        payload = rle.encode_rle_elias(bits_keep)
+        payload = rle.encode_rle_elias(flags)
         return "rle_elias", payload, len(payload) * 8
     else:
-        payload = bm.pack_bitmask(bits_keep)
+        payload = bm.pack_bitmask(flags)
         return "bitmask", payload, bm.cost_bits(n)
 
 
@@ -87,6 +86,7 @@ def _compute_static_bits(paths: Paths, cfg: Any) -> int:
 def main(cfg: Any) -> None:
     log = setup_logging()
     cfg = resolve_auto(cfg)
+    torch.use_deterministic_algorithms(True, warn_only=False)
     set_determinism(int(getattr(cfg, "seed", 17)))
     paths = Paths().ensure()
     dataset_name = getattr(cfg.e2b.scalability, "dataset", "wikitext-2")
@@ -265,9 +265,6 @@ def main(cfg: Any) -> None:
                 hidden=int(cfg.experiment.stage2.vq.index_lm.hidden_size),
                 layers=int(cfg.experiment.stage2.vq.index_lm.layers),
                 epochs=int(cfg.experiment.stage2.vq.index_lm.epochs) + 2,
-                val_fraction=0.1,
-                early_stop=True,
-                patience=3,
             )
             .to(device)
             .eval()
@@ -331,7 +328,6 @@ def main(cfg: Any) -> None:
         vq_pcm_mean = float(sum(vq_pcms) / max(1, len(vq_pcms))) if vq_pcms else 0.0
         pm_amort_bpc = (static_bits_total / max(1, pm_chars)) + pm_bpc
         vq_amort_bpc = (static_bits_total / max(1, vq_chars)) + vq_bpc
-
         out_dir = Path("results/subsets") / str(int(size))
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "pm_points.json").write_text(
@@ -364,7 +360,6 @@ def main(cfg: Any) -> None:
                 indent=2,
             )
         )
-
         log.info(
             f"[scalability] size={size} → "
             f"PM: bpc={pm_bpc:.4f}, amort_bpc={pm_amort_bpc:.4f}, charF={pm_charF_mean:.2f}, TCM={pm_tcm_mean:.2f}, PCM={pm_pcm_mean:.2f} | "

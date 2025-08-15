@@ -8,7 +8,7 @@ import os, subprocess
 import kenlm, math
 
 
-def _train_kenlm(sentences: List[str], order: int, workdir: str) -> Tuple[str, str]:
+def train_kenlm(sentences: List[str], order: int, workdir: str) -> Tuple[str, str]:
     wd = Path(workdir)
     wd.mkdir(parents=True, exist_ok=True)
     corpus = wd / "train.txt"
@@ -24,7 +24,7 @@ def _train_kenlm(sentences: List[str], order: int, workdir: str) -> Tuple[str, s
             "directory containing 'lmplz' and 'build_binary' (e.g., export KENLM_BIN=/path/to/kenlm/build/bin)."
         )
 
-    arpa = wd / f"lm_{order}.arpa"
+    arpa = wd / f"lm{order}.arpa"
     binary = wd / f"lm_{order}.binary"
 
     mem = os.environ.get("KENLM_MEMORY", "70%")
@@ -101,14 +101,14 @@ def _viterbi_fill(
         nxt = []
         for st, seq, sc in beams:
             for w in cand:
-                st2 = type(st)()
+                st2 = kenlm.State()
                 inc = model.BaseScore(st, w, st2)
                 nxt.append((st2, seq + [w], sc + inc))
         nxt.sort(key=lambda x: x[2], reverse=True)
         beams = nxt[:beam_size]
     best = None
     for st, seq, sc in beams:
-        st2 = type(st)()
+        st2 = kenlm.State()
         inc = model.BaseScore(st, end_word, st2)
         if best is None or (sc + inc) > best[2]:
             best = (st2, seq, sc + inc)
@@ -124,7 +124,7 @@ def subsample_and_reconstruct_kenlm5(
     cand_per_step: int = 200,
     max_vocab: int = 50000,
 ) -> List[Dict]:
-    arpa, binary = _train_kenlm(train_texts, order=5, workdir=workdir)
+    arpa, binary = train_kenlm(train_texts, order=5, workdir=workdir)
     lm = _load_kenlm(arpa, binary)
     vocab = _build_vocab(train_texts, max_vocab=max_vocab)
     outputs = []
@@ -160,7 +160,7 @@ def subsample_and_reconstruct_kenlm5(
 def kenlm_ngram_bpc(
     train_texts: List[str], test_texts: List[str], workdir: str, order: int = 8
 ) -> float:
-    arpa, binary = _train_kenlm(train_texts, order=order, workdir=workdir)
+    arpa, binary = train_kenlm(train_texts, order=order, workdir=workdir)
     lm = _load_kenlm(arpa, binary)
     total_log10 = 0.0
     total_chars = 0
@@ -169,3 +169,4 @@ def kenlm_ngram_bpc(
         total_chars += len(t)
     bits = -total_log10 / math.log10(2.0)
     return bits / max(1, total_chars)
+

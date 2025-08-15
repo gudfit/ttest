@@ -123,6 +123,7 @@ def train_vq_joint(
     epochs: int = 2,
     beta: float = 0.25,
 ) -> Tuple[VQBottleneckWrapper, AutoTokenizer]:
+    torch.use_deterministic_algorithms(True, warn_only=False)
     safe_name = _select_memory_appropriate_model(base_model_name)
 
     tok = AutoTokenizer.from_pretrained(safe_name)
@@ -191,9 +192,8 @@ def _seq_ce_bits(lm: "IndexLM", seq: List[int]) -> float:
     x = torch.tensor(seq[:-1], dtype=torch.long, device=device).unsqueeze(0)
     y = torch.tensor(seq[1:], dtype=torch.long, device=device).unsqueeze(0)
     logits = lm(x)
-    logp = F.log_softmax(logits, dim=-1)
-    nll = -logp.gather(-1, y.unsqueeze(-1)).squeeze(-1)
-    return float((nll / torch.log(torch.tensor(2.0, device=device))).sum().item())
+    loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+    return float((loss / torch.log(torch.tensor(2.0, device=device))).sum().item())
 
 
 def train_index_lm(
@@ -206,6 +206,7 @@ def train_index_lm(
     early_stop: bool = True,
     patience: int = 3,
 ) -> IndexLM:
+    torch.use_deterministic_algorithms(True, warn_only=False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     lm = IndexLM(K, hidden_size=hidden, layers=layers).to(device)
     opt = torch.optim.AdamW(lm.parameters(), lr=1e-3)

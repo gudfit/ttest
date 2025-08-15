@@ -1,4 +1,4 @@
-# lldc/compression/token_alignment.py
+# FILE: lldc/compression/token_alignment.py
 
 from __future__ import annotations
 from typing import Iterable, List, Tuple, Any
@@ -64,3 +64,4 @@ def select_oracle_token_ids_from_spans(
         if any(_overlaps(span, s) for s in kept_char_spans):
             kept_ids.append(int(tid))
     return kept_ids
+
