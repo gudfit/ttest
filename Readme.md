@@ -2,10 +2,6 @@
 
 **LLMs as Data Compressors**: reproducible research code for **Predictive Masking (PM)** & **Vector-Quantization (VQ)** compression pipelines.
 
-Hey there! This is my thesis code as an MSc/PhD student diving into how LLMs can act as data compressors. I've tried to make this README super human-friendly—think of it as notes I'd share with a lab mate. It's a bit long because setup can be fiddly (especially building external tools from source), but once you're through the one-time stuff, running experiments is a breeze with Make and Hydra. I'll walk you step-by-step, including caveats from my own installs on Ubuntu (22.04 LTS, but should work on similar Linux distros). If you're on macOS/Windows, you might need tweaks—feel free to adapt or ping me.
-
-The goal: Make this fully reproducible so you (or future me) can clone, setup, and run without headaches. Let's get you from zero to compressing WikiText-103.
-
 ---
 
 ## What’s inside (at a glance)
