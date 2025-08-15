@@ -96,11 +96,6 @@ def run_channel_analysis(
     orig_texts: List[str],
     train_texts: List[str] | None = None,
 ) -> Dict[str, float]:
-    """
-    Compute channel statistics on reconstructions and a *standard* n-gram baseline
-    using KenLM (5-gram). This replaces the ad-hoc KN5 for Experiment 2B to align
-    with the methodology claim.
-    """
     n_list = list(
         _cfg_get(
             cfg,

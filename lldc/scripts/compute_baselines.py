@@ -48,7 +48,10 @@ def main():
 
         try:
             bpc8 = kenlm_ngram_bpc(
-                train_texts, test_texts, workdir="artifacts/runs/kenlm_8gram", order=8
+                train_texts,
+                test_texts,
+                workdir="artifacts/runs/kenlm_8gram_baseline",
+                order=8,
             )
             results["kenlm_8gram"] = {"bpc": float(bpc8), "status": "ok"}
         except Exception as e:
@@ -101,10 +104,9 @@ def main():
             results["cmix"] = {"status": f"unavailable or error: {e}"}
 
         try:
-            import deepzip
+            import deepzip  # noqa: F401
 
-            # NOTE: This is a placeholder; actual DeepZip usage depends on package API.
-            # We record unavailability gracefully if import fails.
+            # Placeholder — record availability only
             results["deepzip"] = {"status": "ok_but_not_implemented_in_this_stub"}
         except Exception as e:
             results["deepzip"] = {"status": f"unavailable: {e}"}

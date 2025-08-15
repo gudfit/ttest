@@ -13,11 +13,17 @@ from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausal
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
 from lldc.utils.hydra_utils import resolve_auto
+from lldc.utils.determinism import set_determinism
 from lldc.compression.predictive_masking import pll_surprisal_scores
 from lldc.compression.masking_policies import choose_mask
 from lldc.compression.payload_codec import arithmetic as ac
 from lldc.compression.payload_codec import bitmask as bm
 from lldc.compression.payload_codec import rle_elias as rle
+from lldc.compression.reconstruction import reconstruct_mlm_text
+from lldc.compression.token_alignment import (
+    kept_char_spans_from_offsets,
+    select_oracle_token_ids_from_spans,
+)
 
 from lldc.models.vq.vq_trainer import (
     train_vq_joint,
@@ -81,6 +87,7 @@ def _compute_static_bits(paths: Paths, cfg: Any) -> int:
 def main(cfg: Any) -> None:
     log = setup_logging()
     cfg = resolve_auto(cfg)
+    set_determinism(int(getattr(cfg, "seed", 17)))
     paths = Paths().ensure()
     dataset_name = getattr(cfg.e2b.scalability, "dataset", "wikitext-2")
     factors = list(getattr(cfg.e2b.scalability, "factors", [1, 2, 4, 8, 16, 32]))
@@ -152,38 +159,40 @@ def main(cfg: Any) -> None:
                 keep_flags = choose_mask("topk_global", s_bits, keep_fraction=0.4)
                 codec, pos_payload, pos_bits = _position_codec(keep_flags.tolist())
                 pm_position_bits += pos_bits
-                kept_mlmtoks = ids[keep_flags]
+                spans = kept_char_spans_from_offsets(tok_mlm, text, keep_flags)
+                kept_oracle_ids_list = select_oracle_token_ids_from_spans(
+                    oracle_tok, text, spans
+                )
                 kept_text = (
-                    tok_mlm.decode(kept_mlmtoks, skip_special_tokens=True)
-                    if kept_mlmtoks.numel()
+                    oracle_tok.decode(kept_oracle_ids_list, skip_special_tokens=True)
+                    if kept_oracle_ids_list
                     else ""
                 )
                 syms: List[int] = []
                 probs: List[List[float]] = []
-                if kept_text:
-                    kept_ids_oracle = oracle_tok(
-                        kept_text, add_special_tokens=False, return_tensors="pt"
-                    )["input_ids"][0].to(device)
-                    if kept_ids_oracle.numel():
-                        out = oracle(
-                            input_ids=torch.tensor(
-                                [[oracle_tok.bos_token_id or 0]], device=device
-                            )
+                if kept_oracle_ids_list:
+                    out = oracle(
+                        input_ids=torch.tensor(
+                            [[oracle_tok.bos_token_id or oracle_tok.eos_token_id or 0]],
+                            device=device,
                         )
-                        past = out.past_key_values
-                        logits = out.logits[:, -1, :]
+                    )
+                    past = out.past_key_values
+                    logits = out.logits[:, -1, :]
+                    p = torch.softmax(logits, dim=-1)
+
+                    for tid in kept_oracle_ids_list:
+                        probs.append(p.squeeze(0).detach().cpu().tolist())
+                        step = oracle(
+                            input_ids=torch.tensor([[tid]], device=device),
+                            past_key_values=past,
+                            use_cache=True,
+                        )
+                        past = step.past_key_values
+                        logits = step.logits[:, -1, :]
                         p = torch.softmax(logits, dim=-1)
-                        for tid in kept_ids_oracle.tolist():
-                            probs.append(p.squeeze(0).detach().cpu().tolist())
-                            step = oracle(
-                                input_ids=torch.tensor([[tid]], device=device),
-                                past_key_values=past,
-                                use_cache=True,
-                            )
-                            past = step.past_key_values
-                            logits = step.logits[:, -1, :]
-                            p = torch.softmax(logits, dim=-1)
-                            syms.append(int(tid))
+                        syms.append(int(tid))
+
                 if syms:
                     try:
                         payload = ac.encode_with_probs(syms, probs)
@@ -191,11 +200,12 @@ def main(cfg: Any) -> None:
                     except Exception:
                         eps = 1e-12
                         xb = 0.0
-                        for sym, p in zip(syms, probs):
-                            pr = float(p[sym]) if 0 <= sym < len(p) else 0.0
+                        for sym, pvec in zip(syms, probs):
+                            pr = float(pvec[sym]) if 0 <= sym < len(pvec) else 0.0
                             xb += -math.log2(max(pr, eps))
                         pm_token_bits += int(round(xb))
-                recon_text = kept_text
+
+                recon_text = reconstruct_mlm_text(tok_mlm, mlm, ids, keep_flags)
                 pm_chars += len(text)
                 cf = character_level_fidelity(text, recon_text)
                 tcm_pcm = tcm_pcm_from_texts(text, recon_text, cp_oracle)
@@ -209,7 +219,7 @@ def main(cfg: Any) -> None:
                             "original": text,
                             "reconstruction": recon_text,
                             "orig_chars": len(text),
-                            "kept_tokens": int(kept_mlmtoks.numel()),
+                            "kept_tokens": int(keep_flags.sum().item()),
                             "token_bits": int(pm_token_bits),
                             "position_bits": int(pm_position_bits),
                             "char_fidelity": cf,
