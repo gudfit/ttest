@@ -147,7 +147,7 @@ def main(cfg: Any) -> None:
     ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
     split_map = cfg.data.source.split_map
     text_field = cfg.data.processing.text_field
-    test_split = ds[split_map.test].select(range(500))
+    test_split = ds[split_map.test].select(range(1000))
     max_eval = int(
         getattr(getattr(cfg, "data", {}), "limits", {}).get("max_eval_samples", 2000)
         or 2000

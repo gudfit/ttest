@@ -1,7 +1,7 @@
 name: crumpled_paper
 oracle:
-  ensemble: [gpt2-large, gpt2-medium]
-  measurement_tokenizer: gpt2-large
+  ensemble: [gpt2-xl, google/gemma-3-270m]
+  measurement_tokenizer: gpt2-xl
 alignment:
   algorithm: needleman_wunsch
   gap_penalty_bits: auto

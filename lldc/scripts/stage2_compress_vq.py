@@ -37,8 +37,8 @@ def main(cfg: Any) -> None:
     ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
     split_map = cfg.data.source.split_map
     text_field = cfg.data.processing.text_field
-    train_split = ds[split_map.train].select(range(2000))
-    test_split = ds[split_map.test].select(range(500))
+    train_split = ds[split_map.train].select(range(10000))
+    test_split = ds[split_map.test].select(range(1000))
     model_vq, tok = train_vq_joint(
         base_model_name=cfg.model.pretrained_name,
         dataset_name=cfg.data.source.hf_dataset,
@@ -53,7 +53,7 @@ def main(cfg: Any) -> None:
     )
     model_vq.eval().to(device)
     max_train = _limit(
-        getattr(getattr(cfg, "data", {}), "limits", {}).get("max_train_samples"), 2000
+        getattr(getattr(cfg, "data", {}), "limits", {}).get("max_train_samples"), 10000
     )
     idx_train: List[List[int]] = []
     for ex in train_split.select(range(min(max_train, len(train_split)))):

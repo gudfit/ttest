@@ -141,7 +141,7 @@ hydra:
     - path: ''
       schema: structured
       provider: schema
-    output_dir: /home/ubuntu/lldc/outputs/2025-08-15/16-15-52
+    output_dir: /home/ubuntu/lldc/outputs/2025-08-15/16-38-06
     choices:
       experiment: e1a_wiki103
       model: roberta-base

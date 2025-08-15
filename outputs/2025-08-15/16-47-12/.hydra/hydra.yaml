@@ -112,13 +112,13 @@ hydra:
     hydra:
     - hydra.mode=RUN
     task:
-    - model=bert-base-cased
+    - model=roberta-base
     - +seed=13
     - +experiment=e1a_wiki103
   job:
     name: stage1_specialise
     chdir: null
-    override_dirname: +experiment=e1a_wiki103,+seed=13,model=bert-base-cased
+    override_dirname: +experiment=e1a_wiki103,+seed=13,model=roberta-base
     id: ???
     num: ???
     config_name: defaults
@@ -143,10 +143,10 @@ hydra:
     - path: ''
       schema: structured
       provider: schema
-    output_dir: /home/ubuntu/lldc/outputs/2025-08-15/15-16-58
+    output_dir: /home/ubuntu/lldc/outputs/2025-08-15/16-47-12
     choices:
       experiment: e1a_wiki103
-      model: bert-base-cased
+      model: roberta-base
       data: wikitext-103
       compute: local_dev
       hydra/env: default
