@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 import hydra
-from typing import Any, List
+from typing import Any, List, Sequence
 from pathlib import Path
-import importlib
+from importlib import import_module
 import json
 import shlex
 import subprocess
+import os
 import sys
 
+from hydra.core.global_hydra import GlobalHydra
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
 from lldc.data.bootstrap import ensure_data
@@ -65,10 +67,27 @@ def run_post_runners(cfg: Any) -> None:
         )
 
 
-def _run_module(mod: str, argv: List[str]) -> None:
-    m = importlib.import_module(mod)
-    if hasattr(m, "main"):
-        m.main(*argv)
+def _run_module(modname: str, argv: Sequence[str] = ()) -> None:
+    # Build a flat list of strings for the child process
+    cmd = [sys.executable, "-m", str(modname)]
+    cmd.extend(str(a) for a in argv)  # <- guarantees no nested list/tuples
+
+    # Run from repo root and ensure configs/ is on PYTHONPATH
+    repo_root = Path(__file__).resolve().parents[2]  # adjust if your layout differs
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
+
+    # (optional) quick sanity checks while debugging
+    # print("CMD:", repr(cmd))
+    # assert all(isinstance(x, str) for x in cmd)
+    # assert isinstance(env["PYTHONPATH"], str)
+
+    subprocess.run(
+        cmd,
+        check=True,
+        cwd=str(repo_root),  # must be str/PathLike, not list
+        env=env,  # must be dict[str, str]
+    )
 
 
 def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
@@ -103,7 +122,7 @@ def main() -> None:
                     log.info(f"[sweeps:e1a] Stage1 specialise {m} (seed={seed})")
                     _run_module(
                         "lldc.scripts.stage1_specialise",
-                        [f"model={m}", f"seed={seed}", *hydra_overrides],
+                        [f"model={m}", f"+seed={seed}", *hydra_overrides],
                     )
 
             for seed in seed_list:
@@ -113,7 +132,7 @@ def main() -> None:
                         "lldc.scripts.stage2_compress_pm",
                         [
                             f"model={m}",
-                            f"seed={seed}",
+                            f"+seed={seed}",
                             "dump_recon=true",
                             *hydra_overrides,
                         ],
@@ -126,7 +145,7 @@ def main() -> None:
                         "lldc.scripts.stage2_compress_vq",
                         [
                             f"model={m}",
-                            f"seed={seed}",
+                            f"+seed={seed}",
                             "dump_recon=true",
                             *hydra_overrides,
                         ],
@@ -151,7 +170,7 @@ def main() -> None:
                                 f"model={m}",
                                 f"prune_level={lvl}",
                                 "recover_epochs=auto",
-                                f"seed={seed}",
+                                f"+seed={seed}",
                                 *hydra_overrides,
                             ],
                         )
@@ -163,7 +182,7 @@ def main() -> None:
                                     f"model={m}",
                                     f"model_ckpt={ckpt}",
                                     "dump_recon=true",
-                                    f"seed={seed}",
+                                    f"+seed={seed}",
                                     *hydra_overrides,
                                 ],
                             )
@@ -174,7 +193,7 @@ def main() -> None:
                                     f"model={m}",
                                     f"model_ckpt={ckpt}",
                                     "dump_recon=true",
-                                    f"seed={seed}",
+                                    f"+seed={seed}",
                                     *hydra_overrides,
                                 ],
                             )
@@ -200,7 +219,7 @@ def main() -> None:
                             [
                                 f"model={m}",
                                 "dump_recon=true",
-                                f"seed={seed}",
+                                f"+seed={seed}",
                                 *hydra_overrides,
                             ],
                         )
@@ -210,7 +229,7 @@ def main() -> None:
                             [
                                 f"model={m}",
                                 "dump_recon=true",
-                                f"seed={seed}",
+                                f"+seed={seed}",
                                 *hydra_overrides,
                             ],
                         )

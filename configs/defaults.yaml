@@ -6,6 +6,7 @@ defaults:
       - efficiency
       - fidelity
       - crumpled_paper
+  - _self_
 
 experiment:
   name: e1a_wiki103
