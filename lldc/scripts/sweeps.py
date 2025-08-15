@@ -13,8 +13,9 @@ import sys
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
 from lldc.data.bootstrap import ensure_data
-from lldc.analysis.channel import run_channel, ChannelConfig
 from lldc.utils.seed import DEFAULT_SEEDS
+from datasets import load_dataset
+from lldc.scripts.channel_analysis import run_channel_analysis
 
 
 def _extract_hydra_overrides_from_argv(argv: List[str]) -> List[str]:
@@ -221,32 +222,20 @@ def main() -> None:
             orig = [d.get("original", "") for d in docs]
             recon = [d.get("reconstruction", "") for d in docs]
 
-            payload_bits = sum(
-                int(d.get("position_bits", 0)) + int(d.get("token_bits", 0))
-                for d in docs
-            )
-            base_chars = sum(
-                max(1, int(d.get("orig_chars", len(d.get("original", "")))))
-                for d in docs
-            )
-
-            static_report = Path("artifacts/results/static_size.json")
-            static_bits = (
-                int(json.loads(static_report.read_text()).get("static_bits_total", 0))
-                if static_report.exists()
-                else 0
-            )
-
-            out_path = run_channel(
-                test_texts=orig,
+            ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
+            text_field = cfg.data.processing.text_field
+            train_split = ds[cfg.data.source.split_map.train]
+            train_texts = [ex[text_field] for ex in train_split]
+            stats = run_channel_analysis(
+                cfg,
                 recon_texts=recon,
-                payload_bits_total=payload_bits,
-                static_bits=static_bits,
-                base_chars=base_chars,
-                cfg=ChannelConfig(out_dir=paths.results / "e2b"),
+                orig_texts=orig,
+                train_texts=train_texts,
             )
-            log.info(f"[sweeps:e2b] Channel results -> {out_path}")
-
+            out_path = paths.rd_curves / "channel_stats.json"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(stats, indent=2), encoding="utf-8")
+            log.info(f"[sweeps:e2b] Channel stats -> {out_path}")
             _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
             run_post_runners(cfg)
 
