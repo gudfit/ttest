@@ -3,7 +3,7 @@
 from typing import List, Sequence
 import random
 
-DEFAULT_SEEDS: Sequence[int] = (13, 42, 1234, 2025, 9001)
+DEFAULT_SEEDS: Sequence[int] = (13, 42)
 
 
 def resolve_seeds(seed: str | int | None, num_runs: int | None) -> List[int]:

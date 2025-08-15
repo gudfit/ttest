@@ -1,5 +1,4 @@
 # lldc/compression/compressor_vq.py
-
 from __future__ import annotations
 from typing import Any, List, Dict
 import torch
@@ -10,8 +9,6 @@ from lldc.models.vq.vq_trainer import (
     train_index_lm,
     cross_entropy_bits_index_stream,
 )
-
-
 def compress_dataset_with_vq(cfg: Any) -> Dict[str, float]:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, tok = train_vq_joint(
@@ -33,7 +30,7 @@ def compress_dataset_with_vq(cfg: Any) -> Dict[str, float]:
     train_split = ds[split_map.train]
     test_split = ds[split_map.test]
     idx_train: List[List[int]] = []
-    for ex in train_split.select(range(min(2000, len(train_split)))):
+    for ex in train_split.select(range(min(10000, len(train_split)))):
         txt = ex.get(text_field) or ""
         if not txt:
             continue
@@ -46,7 +43,6 @@ def compress_dataset_with_vq(cfg: Any) -> Dict[str, float]:
         seq_idx = encode_indices(model, ids)[0].tolist()
         if seq_idx:
             idx_train.append(seq_idx)
-
     K = int(cfg.experiment.stage2.vq.codebook_sizes[0])
     lm = train_index_lm(
         idx_train,
@@ -58,7 +54,7 @@ def compress_dataset_with_vq(cfg: Any) -> Dict[str, float]:
     total_bits = 0.0
     total_tokens = 0
     total_chars = 0
-    for ex in test_split.select(range(min(2000, len(test_split)))):
+    for ex in test_split.select(range(min(5000, len(test_split)))):
         txt = ex.get(text_field) or ""
         if not txt:
             continue
@@ -72,7 +68,6 @@ def compress_dataset_with_vq(cfg: Any) -> Dict[str, float]:
         total_bits += cross_entropy_bits_index_stream(lm, seq_idx)
         total_tokens += max(0, len(seq_idx) - 1)
         total_chars += len(txt)
-
     bpt = total_bits / max(1, total_tokens)
     bpc = total_bits / max(1, total_chars)
     return {

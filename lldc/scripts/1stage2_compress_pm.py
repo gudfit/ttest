@@ -1,17 +1,21 @@
 # lldc/scripts/stage2_compress_pm.py
+
 from __future__ import annotations
 from typing import Any, List, Tuple
 import json
 import math
 import time
 from pathlib import Path
+
 import hydra
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
+
 from lldc.utils.paths import Paths
 from lldc.utils.logging import setup_logging
+
 from lldc.compression.predictive_masking import pll_surprisal_scores
 from lldc.compression.masking_policies import choose_mask
 from lldc.compression.payload_codec import arithmetic as ac
@@ -24,6 +28,8 @@ from lldc.compression.token_alignment import (
 )
 from lldc.compressors.pm.token_coder import encode_kept_stream_with_oracle
 from lldc.metrics.fidelity import character_level_fidelity
+
+
 def _position_codec(flags: List[bool]) -> Tuple[str, bytes, int]:
     n = len(flags)
     keep_frac = (sum(1 for f in flags if f) / max(1, n)) if n > 0 else 0.0
@@ -33,6 +39,8 @@ def _position_codec(flags: List[bool]) -> Tuple[str, bytes, int]:
     else:
         payload = bm.pack_bitmask(flags)
         return "bitmask", payload, bm.cost_bits(n)
+
+
 def _reconstruct_beam(
     tok, mlm, input_ids: torch.LongTensor, keep_flags: torch.Tensor, beam_width: int = 4
 ) -> str:
@@ -58,11 +66,13 @@ def _reconstruct_beam(
     banned_bias = torch.zeros(int(vocab_size), device=device)
     if bad_ids.numel() > 0:
         banned_bias[bad_ids] = float("-inf")
+
     def make_attn(seq_2d: torch.LongTensor) -> torch.LongTensor:
         pad_id = tok.pad_token_id
         if pad_id is None:
             return torch.ones_like(seq_2d, dtype=torch.long)
         return (seq_2d != pad_id).long()
+
     beams: List[Tuple[torch.LongTensor, float]] = [(masked.unsqueeze(0), 0.0)]
     with torch.inference_mode():
         for pos in positions:
@@ -88,19 +98,25 @@ def _reconstruct_beam(
         if len(beams) > 1:
             final_batch = torch.cat([seq for (seq, _) in beams], dim=0)
             pll_scores = torch.zeros(final_batch.size(0), device=device)
+
             for pos in positions:
                 tmp = final_batch.clone()
                 true_tok = tmp[:, pos].clone()
                 tmp[:, pos] = int(mask_id)
+
                 attn = make_attn(tmp)
                 logits = mlm(input_ids=tmp, attention_mask=attn).logits[:, pos, :]
                 logp = F.log_softmax(logits, dim=-1)
                 pll_scores += logp[torch.arange(tmp.size(0), device=device), true_tok]
+
             best_idx = int(torch.argmax(pll_scores).item())
             best_ids = beams[best_idx][0][0]
         else:
             best_ids = beams[0][0][0]
+
     return tok.decode(best_ids, skip_special_tokens=True)
+
+
 def _reconstruct_nucleus(
     tok, mlm, input_ids: torch.LongTensor, keep_flags: torch.Tensor, top_p: float = 0.9
 ) -> str:
@@ -114,6 +130,7 @@ def _reconstruct_nucleus(
     positions = torch.nonzero(~keep_flags, as_tuple=False).flatten().tolist()
     if not positions:
         return tok.decode(ids, skip_special_tokens=True)
+
     seq = masked.unsqueeze(0)
     for pos in positions:
         out = mlm(input_ids=seq).logits[0, pos]
@@ -126,7 +143,10 @@ def _reconstruct_nucleus(
         choice = torch.multinomial(p, num_samples=1).item()
         tid = int(sorted_idx[choice].item())
         seq[0, pos] = tid
+
     return tok.decode(seq[0], skip_special_tokens=True)
+
+
 @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
 def main(cfg: Any) -> None:
     log = setup_logging()
@@ -147,7 +167,7 @@ def main(cfg: Any) -> None:
     ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
     split_map = cfg.data.source.split_map
     text_field = cfg.data.processing.text_field
-    test_split = ds[split_map.test].select(range(500))
+    test_split = ds[split_map.test]
     max_eval = int(
         getattr(getattr(cfg, "data", {}), "limits", {}).get("max_eval_samples", 2000)
         or 2000
@@ -270,5 +290,7 @@ def main(cfg: Any) -> None:
     log.info(
         f"[stage2_pm] Wrote {recons_path} | bpc={summary['bpc']:.6f} | docs={n_docs} | decode(ms)=payload+mlm"
     )
+
+
 if __name__ == "__main__":
     main()

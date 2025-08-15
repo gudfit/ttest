@@ -1,4 +1,5 @@
 # lldc/scripts/sweeps.py
+
 from __future__ import annotations
 import hydra
 from typing import Any, List
@@ -11,12 +12,15 @@ import os
 from typing import Sequence
 import sys
 from hydra.core.global_hydra import GlobalHydra
+
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
 from lldc.data.bootstrap import ensure_data
 from lldc.utils.seed import DEFAULT_SEEDS
 from datasets import load_dataset
 from lldc.scripts.channel_analysis import run_channel_analysis
+
+
 def _extract_hydra_overrides_from_argv(argv: List[str]) -> List[str]:
     forwarded: List[str] = []
     sweeps_only = {"--with-dataset-stats", "--with-latency-flops"}
@@ -27,9 +31,13 @@ def _extract_hydra_overrides_from_argv(argv: List[str]) -> List[str]:
             continue
         forwarded.append(tok)
     return forwarded
+
+
 def _run_cmd(cmd: List[str]) -> None:
     print(f"[sweeps] $ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
     subprocess.run(cmd, check=True)
+
+
 def run_post_runners(cfg: Any) -> None:
     hydra_overrides = _extract_hydra_overrides_from_argv(sys.argv)
     argv_tokens = set(sys.argv[1:])
@@ -48,6 +56,7 @@ def run_post_runners(cfg: Any) -> None:
                 *hydra_overrides,
             ]
         )
+
     if with_latency_flops:
         _run_cmd(
             [
@@ -57,24 +66,31 @@ def run_post_runners(cfg: Any) -> None:
                 *hydra_overrides,
             ]
         )
+
+
+
 def _run_module(modname: str, argv: Sequence[str] = ()) -> None:
     # Build a flat list of strings for the child process
     cmd = [sys.executable, "-m", str(modname)]
-    cmd.extend(str(a) for a in argv) # <- guarantees no nested list/tuples
+    cmd.extend(str(a) for a in argv)  # <- guarantees no nested list/tuples
+
     # Run from repo root and ensure configs/ is on PYTHONPATH
-    repo_root = Path(__file__).resolve().parents[2] # adjust if your layout differs
+    repo_root = Path(__file__).resolve().parents[2]  # adjust if your layout differs
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
+
     # (optional) quick sanity checks while debugging
     # print("CMD:", repr(cmd))
     # assert all(isinstance(x, str) for x in cmd)
     # assert isinstance(env["PYTHONPATH"], str)
+
     subprocess.run(
         cmd,
         check=True,
-        cwd=str(repo_root), # must be str/PathLike, not list
-        env=env, # must be dict[str, str]
+        cwd=str(repo_root),   # must be str/PathLike, not list
+        env=env,              # must be dict[str, str]
     )
+
 def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
     out: list[dict] = []
     for p in jsonl_paths:
@@ -85,17 +101,22 @@ def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
                 except Exception:
                     pass
     return out
+
+
 def main() -> None:
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
         log = setup_logging()
         paths = Paths().ensure()
         ensure_data(paths.root)
+
         hydra_overrides = _extract_hydra_overrides_from_argv(sys.argv)
+
         exp = cfg.experiment.name
         mg = getattr(cfg.experiment, "model_groups", {})
-        num_seeds = 2
+        num_seeds = int(getattr(cfg.experiment, "seeds", 1) or 1)
         seed_list = list(DEFAULT_SEEDS)[:num_seeds]
+
         if exp == "e1a_wiki103":
             for seed in seed_list:
                 for m in mg.get("mlm", []):
@@ -104,6 +125,7 @@ def main() -> None:
                         "lldc.scripts.stage1_specialise",
                         [f"model={m}", f"+seed={seed}", *hydra_overrides],
                     )
+
             for seed in seed_list:
                 for m in mg.get("mlm", []):
                     log.info(f"[sweeps:e1a] Stage2 PM {m} (seed={seed})")
@@ -116,6 +138,7 @@ def main() -> None:
                             *hydra_overrides,
                         ],
                     )
+
             for seed in seed_list:
                 for m in mg.get("ar", []):
                     log.info(f"[sweeps:e1a] Stage2 VQ {m} (seed={seed})")
@@ -128,9 +151,11 @@ def main() -> None:
                             *hydra_overrides,
                         ],
                     )
+
             _run_module("lldc.scripts.compute_baselines", [*hydra_overrides])
             _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
             run_post_runners(cfg)
+
         elif exp == "e2a_pruning":
             levels = cfg.experiment.pruning.schedule.levels
             for seed in seed_list:
@@ -173,14 +198,17 @@ def main() -> None:
                                     *hydra_overrides,
                                 ],
                             )
+
             _run_module("lldc.scripts.compute_baselines", [*hydra_overrides])
             _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
             run_post_runners(cfg)
+
         elif exp == "e2b_channel":
             payload_root = paths.payloads
             pm_paths = list(payload_root.glob("pm_*/recons.jsonl"))
             vq_paths = list(payload_root.glob("vq_*/recons.jsonl"))
             payloads_exist = bool(pm_paths or vq_paths)
+
             if not payloads_exist:
                 log.info(
                     "[sweeps:e2b] No recon dumps found — generating via Stage2 now."
@@ -206,14 +234,17 @@ def main() -> None:
                                 *hydra_overrides,
                             ],
                         )
+
             pm_paths = list(payload_root.glob("pm_*/recons.jsonl"))
             vq_paths = list(payload_root.glob("vq_*/recons.jsonl"))
             docs = _load_recons(pm_paths) + _load_recons(vq_paths)
+
             orig = [d.get("original", "") for d in docs]
             recon = [d.get("reconstruction", "") for d in docs]
+
             ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
             text_field = cfg.data.processing.text_field
-            train_split = ds[cfg.data.source.split_map.train].select(range(2000))
+            train_split = ds[cfg.data.source.split_map.train]
             train_texts = [ex[text_field] for ex in train_split]
             stats = run_channel_analysis(
                 cfg,
@@ -227,9 +258,13 @@ def main() -> None:
             log.info(f"[sweeps:e2b] Channel stats -> {out_path}")
             _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
             run_post_runners(cfg)
+
         else:
             log.error(f"Unknown experiment={exp}")
             sys.exit(2)
+
     _run()
+
+
 if __name__ == "__main__":
     main()

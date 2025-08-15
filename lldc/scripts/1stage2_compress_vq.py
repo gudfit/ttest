@@ -1,22 +1,28 @@
 # lldc/scripts/stage2_compress_vq.py
+
 from __future__ import annotations
 from typing import Any, List, Dict
 import json
 import math
 from pathlib import Path
 import time
+
 import hydra
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
+
 from lldc.utils.paths import Paths
 from lldc.utils.logging import setup_logging
+
 from lldc.models.vq.vq_trainer import (
     train_vq_joint,
     encode_indices,
     train_index_lm,
     cross_entropy_bits_index_stream,
 )
+
+
 def _limit(n: int | None, default: int) -> int:
     try:
         if n is None:
@@ -24,6 +30,8 @@ def _limit(n: int | None, default: int) -> int:
         return int(n)
     except Exception:
         return default
+
+
 @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
 def main(cfg: Any) -> None:
     log = setup_logging()
@@ -32,8 +40,8 @@ def main(cfg: Any) -> None:
     ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
     split_map = cfg.data.source.split_map
     text_field = cfg.data.processing.text_field
-    train_split = ds[split_map.train].select(range(2000))
-    test_split = ds[split_map.test].select(range(500))
+    train_split = ds[split_map.train]
+    test_split = ds[split_map.test]
     model_vq, tok = train_vq_joint(
         base_model_name=cfg.model.pretrained_name,
         dataset_name=cfg.data.source.hf_dataset,
@@ -123,6 +131,7 @@ def main(cfg: Any) -> None:
                 "kept_tokens": 0,
             }
             fout.write(json.dumps(doc_rec) + "\n")
+
     bpt = total_bits / max(1, total_tokens) if total_tokens > 0 else None
     bpc = total_bits / max(1, total_chars) if total_chars > 0 else math.inf
     summary = {
@@ -139,5 +148,7 @@ def main(cfg: Any) -> None:
     }
     (payload_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     log.info(f"[stage2_vq] Wrote {recons_path} and summary: bpc={bpc:.6f}, bpt={bpt}")
+
+
 if __name__ == "__main__":
     main()
