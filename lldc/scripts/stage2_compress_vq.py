@@ -3,14 +3,13 @@
 from __future__ import annotations
 from typing import Any, List, Dict
 import json
+import math  # <-- needed for math.inf
 from pathlib import Path
 import time
-
 import hydra
 import torch
 from datasets import load_dataset
-
-from transformers import AutoTokenizer, AutoModelForCausalLM  
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from lldc.utils.paths import Paths
 from lldc.utils.logging import setup_logging
 from lldc.models.vq.vq_trainer import (
@@ -61,6 +60,7 @@ def main(cfg: Any) -> None:
     text_field = cfg.data.processing.text_field
     train_split = ds[split_map.train].select(range(10000))
     test_split = ds[split_map.test].select(range(1000))
+
     layer_after = int(_cfg_get(cfg, "stage2.vq.bottleneck.layer_after", 6))
     beta = float(_cfg_get(cfg, "stage2.vq.bottleneck.commitment_beta", 0.25))
     K = int(_cfg_get(cfg, "stage2.vq.codebook_sizes.0", 256))
@@ -73,6 +73,7 @@ def main(cfg: Any) -> None:
         log.info(f"[stage2_vq] Using base model from checkpoint: {base_model_name}")
     else:
         log.info(f"[stage2_vq] Using base model from hub: {base_model_name}")
+
     model_vq, tok = train_vq_joint(
         base_model_name=base_model_name,
         dataset_name=cfg.data.source.hf_dataset,
@@ -82,7 +83,7 @@ def main(cfg: Any) -> None:
         layer_after=layer_after,
         codebook_size=K,
         lr=5e-5,
-        epochs=idx_epochs,  
+        epochs=idx_epochs,
         beta=beta,
     )
     model_vq.eval().to(device)
@@ -121,7 +122,10 @@ def main(cfg: Any) -> None:
     max_eval = _limit(
         getattr(getattr(cfg, "data", {}), "limits", {}).get("max_eval_samples"), 2000
     )
-    payload_dir = paths.payloads / f"vq_{cfg.model.pretrained_name.replace('/', '-')}_K{K}"
+
+    payload_dir = (
+        paths.payloads / f"vq_{cfg.model.pretrained_name.replace('/', '-')}_K{K}"
+    )
     payload_dir.mkdir(parents=True, exist_ok=True)
     recons_path = payload_dir / "recons.jsonl"
 
@@ -148,12 +152,12 @@ def main(cfg: Any) -> None:
             total_tokens += max(0, len(seq_idx) - 1)
             total_chars += len(txt)
             n_docs += 1
-
             with torch.no_grad():
-                idx_t = torch.tensor(seq_idx, dtype=torch.long, device=device).unsqueeze(0)
+                idx_t = torch.tensor(
+                    seq_idx, dtype=torch.long, device=device
+                ).unsqueeze(0)
                 toks_pred = model_vq.decode_from_indices(idx_t)[0].tolist()
             recon = tok.decode(toks_pred, skip_special_tokens=True)
-
             doc_rec = {
                 "original": txt,
                 "reconstruction": recon,

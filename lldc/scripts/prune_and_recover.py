@@ -14,6 +14,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
+
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
 from lldc.utils.determinism import set_determinism
@@ -43,15 +44,19 @@ def main(cfg: Any) -> None:
     paths = Paths().ensure()
     torch.use_deterministic_algorithms(True, warn_only=False)
     set_determinism(cfg.seed)
+
     model_name = cfg.model.pretrained_name
     arch = _cfg_arch(model_name)
+
     tok = AutoTokenizer.from_pretrained(model_name)
     if tok.pad_token is None and tok.eos_token:
         tok.pad_token = tok.eos_token
+
     if arch == "mlm":
         model = AutoModelForMaskedLM.from_pretrained(model_name)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_name)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
@@ -59,9 +64,7 @@ def main(cfg: Any) -> None:
         _cfg_get(
             cfg,
             "pruning.structured.drop_attention_heads",
-            _cfg_get(
-                cfg, "experiment.pruning.structured.drop_attention_heads", True
-            ),
+            _cfg_get(cfg, "experiment.pruning.structured.drop_attention_heads", True),
         )
     )
     drop_ffn = bool(
@@ -79,6 +82,7 @@ def main(cfg: Any) -> None:
 
     ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
     text_field = cfg.data.processing.text_field
+
     def tok_fn(b):
         return tok(
             b[text_field],
@@ -88,21 +92,24 @@ def main(cfg: Any) -> None:
 
     ds = ds.map(tok_fn, batched=True, remove_columns=[text_field])
     collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=(arch == "mlm"))
+
     recovery_epochs = _cfg_get(
         cfg,
         "e2a.recovery.finetune_epochs",
         _cfg_get(cfg, "experiment.e2a.recovery.finetune_epochs", 3),
     )
+
     args = TrainingArguments(
         output_dir=str(paths.checkpoints / f"{model_name}_pruned_{cfg.prune_level}"),
         per_device_train_batch_size=2,
         num_train_epochs=int(recovery_epochs),
         learning_rate=5e-5,
         bf16=torch.cuda.is_available(),
-        eval_strategy="no",
+        evaluation_strategy="no",  # <-- fixed
         save_strategy="no",
         report_to=[],
     )
+
     trainer = Trainer(
         model=model,
         args=args,
@@ -110,6 +117,7 @@ def main(cfg: Any) -> None:
         train_dataset=ds["train"].select(range(min(4000, len(ds["train"])))),
     )
     trainer.train()
+
     outdir = paths.checkpoints / f"{model_name}_pruned_{cfg.prune_level}"
     outdir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(outdir)
@@ -117,5 +125,7 @@ def main(cfg: Any) -> None:
     (outdir / "READY").write_text("ok\n")
     log.info(f"[prune] Saved pruned+recovered checkpoint → {outdir}")
 
+
 if __name__ == "__main__":
     main()
+

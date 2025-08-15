@@ -11,6 +11,7 @@ import subprocess
 import os
 from typing import Sequence
 import sys
+
 from hydra.core.global_hydra import GlobalHydra
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
@@ -18,6 +19,7 @@ from lldc.data.bootstrap import ensure_data
 from lldc.utils.seed import DEFAULT_SEEDS
 from datasets import load_dataset
 from lldc.scripts.channel_analysis import run_channel_analysis
+
 
 def _extract_hydra_overrides_from_argv(argv: List[str]) -> List[str]:
     forwarded: List[str] = []
@@ -30,9 +32,11 @@ def _extract_hydra_overrides_from_argv(argv: List[str]) -> List[str]:
         forwarded.append(tok)
     return forwarded
 
+
 def _run_cmd(cmd: List[str]) -> None:
     print(f"[sweeps] $ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
     subprocess.run(cmd, check=True)
+
 
 def run_post_runners(cfg: Any) -> None:
     hydra_overrides = _extract_hydra_overrides_from_argv(sys.argv)
@@ -62,18 +66,20 @@ def run_post_runners(cfg: Any) -> None:
             ]
         )
 
+
 def _run_module(modname: str, argv: Sequence[str] = ()) -> None:
     cmd = [sys.executable, "-m", str(modname)]
-    cmd.extend(str(a) for a in argv) 
-    repo_root = Path(__file__).resolve().parents[2] 
+    cmd.extend(str(a) for a in argv)
+    repo_root = Path(__file__).resolve().parents[2]
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
     subprocess.run(
         cmd,
         check=True,
-        cwd=str(repo_root), 
-        env=env, 
+        cwd=str(repo_root),
+        env=env,
     )
+
 
 def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
     out: list[dict] = []
@@ -96,7 +102,9 @@ def _best_ready_ckpt(paths: Paths, model_name: str) -> Path | None:
         if not (p / "READY").exists():
             continue
         cfg_ok = (p / "config.json").exists()
-        weights_ok = (p / "model.safetensors").exists() or (p / "pytorch_model.bin").exists()
+        weights_ok = (p / "model.safetensors").exists() or (
+            p / "pytorch_model.bin"
+        ).exists()
         if not (cfg_ok and weights_ok):
             continue
         level = -1.0
@@ -116,6 +124,7 @@ def _best_ready_ckpt(paths: Paths, model_name: str) -> Path | None:
     cands.sort(key=lambda t: (t[0], t[1]), reverse=True)
     return cands[0][2]
 
+
 def main() -> None:
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
@@ -127,7 +136,9 @@ def main() -> None:
         mg = getattr(cfg.experiment, "model_groups", {})
         num_seeds = 2
         seed_list = list(DEFAULT_SEEDS)[:num_seeds]
+
         if exp == "e1a_wiki103":
+            # Stage 1: specialise all MLMs
             for seed in seed_list:
                 for m in mg.get("mlm", []):
                     log.info(f"[sweeps:e1a] Stage1 specialise {m} (seed={seed})")
@@ -135,20 +146,26 @@ def main() -> None:
                         "lldc.scripts.stage1_specialise",
                         [f"model={m}", f"+seed={seed}", *hydra_overrides],
                     )
+
+            # Stage 2: PM on MLMs (reuse local checkpoint when available)
             for seed in seed_list:
                 for m in mg.get("mlm", []):
                     ckpt = _best_ready_ckpt(paths, m)
                     if ckpt is not None:
-                        log.info(f"[sweeps:e1a] Stage2 PM {m} (seed={seed}) using ckpt={ckpt}")
+                        log.info(
+                            f"[sweeps:e1a] Stage2 PM {m} (seed={seed}) using ckpt={ckpt}"
+                        )
                         args = [
                             f"model={m}",
                             f"+seed={seed}",
-                            f"model_ckpt={ckpt}",
+                            f"+model_ckpt={ckpt}",  # <-- append new key (Hydra)
                             "+dump_recon=true",
                             *hydra_overrides,
                         ]
                     else:
-                        log.warning(f"[sweeps:e1a] No local checkpoint found for {m}; using hub weights.")
+                        log.warning(
+                            f"[sweeps:e1a] No local checkpoint found for {m}; using hub weights."
+                        )
                         args = [
                             f"model={m}",
                             f"+seed={seed}",
@@ -156,6 +173,8 @@ def main() -> None:
                             *hydra_overrides,
                         ]
                     _run_module("lldc.scripts.stage2_compress_pm", args)
+
+            # Stage 2: VQ on AR models
             for seed in seed_list:
                 for m in mg.get("ar", []):
                     log.info(f"[sweeps:e1a] Stage2 VQ {m} (seed={seed})")
@@ -168,9 +187,11 @@ def main() -> None:
                             *hydra_overrides,
                         ],
                     )
+
             _run_module("lldc.scripts.compute_baselines", [*hydra_overrides])
             _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
             run_post_runners(cfg)
+
         elif exp == "e2a_pruning":
             levels = cfg.experiment.pruning.schedule.levels
             for seed in seed_list:
@@ -180,23 +201,24 @@ def main() -> None:
                         log.info(
                             f"[sweeps:e2a] Prune & recover {m} at level={lvl} (seed={seed})"
                         )
+                        # Removed invalid 'recover_epochs=auto' override
                         _run_module(
                             "lldc.scripts.prune_and_recover",
                             [
                                 f"model={m}",
                                 f"prune_level={lvl}",
-                                "recover_epochs=auto",
                                 f"+seed={seed}",
                                 *hydra_overrides,
                             ],
                         )
+
                         ckpt = f"artifacts/checkpoints/{m}_pruned_{lvl}"
                         if arch == "mlm":
                             _run_module(
                                 "lldc.scripts.stage2_compress_pm",
                                 [
                                     f"model={m}",
-                                    f"model_ckpt={ckpt}",
+                                    f"+model_ckpt={ckpt}",  # <-- append new key (Hydra)
                                     "+dump_recon=true",
                                     f"+seed={seed}",
                                     *hydra_overrides,
@@ -207,15 +229,17 @@ def main() -> None:
                                 "lldc.scripts.stage2_compress_vq",
                                 [
                                     f"model={m}",
-                                    f"model_ckpt={ckpt}",
+                                    f"+model_ckpt={ckpt}",  # <-- append new key (Hydra)
                                     "+dump_recon=true",
                                     f"+seed={seed}",
                                     *hydra_overrides,
                                 ],
                             )
+
             _run_module("lldc.scripts.compute_baselines", [*hydra_overrides])
             _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
             run_post_runners(cfg)
+
         elif exp == "e2b_channel":
             payload_root = paths.payloads
             pm_paths = list(payload_root.glob("pm_*/recons.jsonl"))
@@ -246,6 +270,7 @@ def main() -> None:
                                 *hydra_overrides,
                             ],
                         )
+
             pm_paths = list(payload_root.glob("pm_*/recons.jsonl"))
             vq_paths = list(payload_root.glob("vq_*/recons.jsonl"))
             docs = _load_recons(pm_paths) + _load_recons(vq_paths)
@@ -270,7 +295,9 @@ def main() -> None:
         else:
             log.error(f"Unknown experiment={exp}")
             sys.exit(2)
+
     _run()
+
 
 if __name__ == "__main__":
     main()
