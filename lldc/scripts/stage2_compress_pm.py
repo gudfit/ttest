@@ -5,11 +5,13 @@ import json
 import math
 import time
 from pathlib import Path
+
 import hydra
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
+
 from lldc.utils.paths import Paths
 from lldc.utils.logging import setup_logging
 from lldc.compression.predictive_masking import pll_surprisal_scores
@@ -24,6 +26,20 @@ from lldc.compression.token_alignment import (
 )
 from lldc.compressors.pm.token_coder import encode_kept_stream_with_oracle
 from lldc.metrics.fidelity import character_level_fidelity
+
+
+def _cfg_get(cfg: Any, dotted: str, default=None):
+    cur = cfg
+    for key in dotted.split("."):
+        if cur is None:
+            return default
+        if isinstance(cur, dict):
+            cur = cur.get(key, None)
+        else:
+            cur = getattr(cur, key, None)
+    return default if cur is None else cur
+
+
 def _position_codec(flags: List[bool]) -> Tuple[str, bytes, int]:
     n = len(flags)
     keep_frac = (sum(1 for f in flags if f) / max(1, n)) if n > 0 else 0.0
@@ -33,6 +49,40 @@ def _position_codec(flags: List[bool]) -> Tuple[str, bytes, int]:
     else:
         payload = bm.pack_bitmask(flags)
         return "bitmask", payload, bm.cost_bits(n)
+
+
+def _find_best_local_ckpt(model_name: str, paths: Paths) -> Path | None:
+    root = paths.checkpoints
+    cands = []
+    pat = f"{model_name}_pruned_*"
+    for p in root.glob(pat):
+        if p.is_dir() and (p / "READY").exists():
+            try:
+                mtime = p.stat().st_mtime
+            except Exception:
+                mtime = 0.0
+            cands.append((mtime, p))
+    if not cands:
+        return None
+    cands.sort(key=lambda t: t[0], reverse=True)
+    return cands[0][1]
+
+
+def _resolve_model_source(cfg: Any, model_name: str, paths: Paths) -> str:
+    explicit = _cfg_get(cfg, "model_ckpt", None)
+    if explicit:
+        p = Path(str(explicit))
+        if p.exists():
+            return str(p)
+
+    if bool(_cfg_get(cfg, "e2a.stage2_reuse", True)):
+        best = _find_best_local_ckpt(model_name, paths)
+        if best is not None:
+            return str(best)
+
+    return model_name
+
+
 def _reconstruct_beam(
     tok, mlm, input_ids: torch.LongTensor, keep_flags: torch.Tensor, beam_width: int = 4
 ) -> str:
@@ -46,9 +96,11 @@ def _reconstruct_beam(
     positions = torch.nonzero(~keep_flags, as_tuple=False).flatten().tolist()
     if not positions:
         return tok.decode(ids, skip_special_tokens=True)
+
     bad_ids = set(getattr(tok, "all_special_ids", []) or [])
     bad_ids.add(int(mask_id))
     bad_ids = torch.tensor(sorted(bad_ids), device=device, dtype=torch.long)
+
     vocab_size = getattr(mlm.config, "vocab_size", None)
     if vocab_size is None:
         try:
@@ -58,11 +110,13 @@ def _reconstruct_beam(
     banned_bias = torch.zeros(int(vocab_size), device=device)
     if bad_ids.numel() > 0:
         banned_bias[bad_ids] = float("-inf")
+
     def make_attn(seq_2d: torch.LongTensor) -> torch.LongTensor:
         pad_id = tok.pad_token_id
         if pad_id is None:
             return torch.ones_like(seq_2d, dtype=torch.long)
         return (seq_2d != pad_id).long()
+
     beams: List[Tuple[torch.LongTensor, float]] = [(masked.unsqueeze(0), 0.0)]
     with torch.inference_mode():
         for pos in positions:
@@ -70,6 +124,7 @@ def _reconstruct_beam(
             attn = make_attn(batch)
             logits = mlm(input_ids=batch, attention_mask=attn).logits[:, pos, :]
             logp = F.log_softmax(logits, dim=-1) + banned_bias
+
             candidates = {}
             for i, (seq, base_score) in enumerate(beams):
                 vals, idxs = torch.topk(logp[i], k=min(beam_width, logp.size(-1)))
@@ -82,16 +137,18 @@ def _reconstruct_beam(
                     sc = base_score + float(lp)
                     if (key not in candidates) or (sc > candidates[key][1]):
                         candidates[key] = (s2, sc)
+
             beams = sorted(candidates.values(), key=lambda x: x[1], reverse=True)[
                 :beam_width
             ]
+
         if len(beams) > 1:
             final_batch = torch.cat([seq for (seq, _) in beams], dim=0)
             pll_scores = torch.zeros(final_batch.size(0), device=device)
             for pos in positions:
                 tmp = final_batch.clone()
                 true_tok = tmp[:, pos].clone()
-                tmp[:, pos] = int(mask_id)
+                tmp[:, pos] = int(tok.mask_token_id)
                 attn = make_attn(tmp)
                 logits = mlm(input_ids=tmp, attention_mask=attn).logits[:, pos, :]
                 logp = F.log_softmax(logits, dim=-1)
@@ -100,7 +157,10 @@ def _reconstruct_beam(
             best_ids = beams[best_idx][0][0]
         else:
             best_ids = beams[0][0][0]
+
     return tok.decode(best_ids, skip_special_tokens=True)
+
+
 def _reconstruct_nucleus(
     tok, mlm, input_ids: torch.LongTensor, keep_flags: torch.Tensor, top_p: float = 0.9
 ) -> str:
@@ -114,6 +174,7 @@ def _reconstruct_nucleus(
     positions = torch.nonzero(~keep_flags, as_tuple=False).flatten().tolist()
     if not positions:
         return tok.decode(ids, skip_special_tokens=True)
+
     seq = masked.unsqueeze(0)
     for pos in positions:
         out = mlm(input_ids=seq).logits[0, pos]
@@ -126,55 +187,65 @@ def _reconstruct_nucleus(
         choice = torch.multinomial(p, num_samples=1).item()
         tid = int(sorted_idx[choice].item())
         seq[0, pos] = tid
+
     return tok.decode(seq[0], skip_special_tokens=True)
+
+
 @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
 def main(cfg: Any) -> None:
     log = setup_logging()
     paths = Paths().ensure()
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    oracle_name = _cfg_get(cfg, "stage2.pm.arithmetic_coder.oracle_model", "gpt2-xl")
     mlm_name = cfg.model.pretrained_name
-    tok_mlm = AutoTokenizer.from_pretrained(mlm_name)
+    model_source = _resolve_model_source(cfg, mlm_name, paths)
+    if Path(model_source).exists():
+        log.info(f"[stage2_pm] Loading MLM from checkpoint: {model_source}")
+    else:
+        log.info(f"[stage2_pm] Loading MLM from hub: {model_source}")
+
+    tok_mlm = AutoTokenizer.from_pretrained(model_source if Path(model_source).exists() else mlm_name)
     if tok_mlm.pad_token is None and tok_mlm.eos_token:
         tok_mlm.pad_token = tok_mlm.eos_token
-    mlm = AutoModelForMaskedLM.from_pretrained(mlm_name).to(device).eval()
-    oracle_name = getattr(
-        getattr(cfg.experiment.stage2, "pm", None), "arithmetic_coder", {}
-    ).get("oracle_model", "gpt2-large")
+
+    mlm = AutoModelForMaskedLM.from_pretrained(model_source).to(device).eval()
+
     oracle_tok = AutoTokenizer.from_pretrained(oracle_name)
     if oracle_tok.pad_token is None and oracle_tok.eos_token:
         oracle_tok.pad_token = oracle_tok.eos_token
     oracle_model = AutoModelForCausalLM.from_pretrained(oracle_name).to(device).eval()
+
     ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
     split_map = cfg.data.source.split_map
     text_field = cfg.data.processing.text_field
-    test_split = ds[split_map.test].select(range(1000))
-    max_eval = int(
-        getattr(getattr(cfg, "data", {}), "limits", {}).get("max_eval_samples", 2000)
-        or 2000
-    )
-    keep_fraction = float(
-        getattr(getattr(cfg.experiment.stage2, "pm", None), "keep_fraction", 0.4)
-    )
-    policy = str(
-        getattr(getattr(cfg.experiment.stage2, "pm", None), "policy", "topk_global")
-    )
-    dec_cfg = getattr(getattr(cfg.experiment.stage2, "pm", None), "decoding", {})
+    test_split = ds[split_map.test]
+    max_eval = int(_cfg_get(cfg, "data.limits.max_eval_samples", 10000) or 10000)
+    test_split = test_split.select(range(min(max_eval, len(test_split))))
+
+    keep_fraction = float(_cfg_get(cfg, "stage2.pm.keep_fraction", 0.4))
+    policy = str(_cfg_get(cfg, "stage2.pm.policy", "topk_global"))
+
+    dec_cfg = _cfg_get(cfg, "stage2.pm.decoding", {}) or {}
     dec_method = str(getattr(dec_cfg, "method", "greedy")).lower()
     beam_width = int(getattr(dec_cfg, "beam_width", 4))
     top_p = float(getattr(dec_cfg, "top_p", 0.9))
+
     tag_mask = f"mask{keep_fraction:.2f}"
     payload_dir = paths.payloads / f"pm_{mlm_name.replace('/', '-')}_{tag_mask}"
     payload_dir.mkdir(parents=True, exist_ok=True)
     recons_path = payload_dir / "recons.jsonl"
+
     n_docs = 0
     total_token_bits = 0
     total_position_bits = 0
     total_chars = 0
+
     with recons_path.open("w", encoding="utf-8") as fout:
-        for ex in test_split.select(range(min(max_eval, len(test_split)))):
+        for ex in test_split:
             text = (ex.get(text_field) or "").strip()
             if not text:
                 continue
+
             ids = tok_mlm(
                 text,
                 return_tensors="pt",
@@ -184,15 +255,19 @@ def main(cfg: Any) -> None:
             )["input_ids"][0].to(device)
             if ids.numel() == 0:
                 continue
+
             s_bits = pll_surprisal_scores(ids, mlm, tok_mlm, tok_mlm.mask_token_id)
             keep_flags_t = choose_mask(policy, s_bits, keep_fraction=keep_fraction)
             keep_flags = keep_flags_t.tolist()
+
             pos_codec, pos_payload, pos_bits = _position_codec(keep_flags)
             total_position_bits += pos_bits
+
             spans = kept_char_spans_from_offsets(tok_mlm, text, keep_flags)
             kept_oracle_ids = select_oracle_token_ids_from_spans(
                 oracle_tok, text, spans
             )
+
             token_bits = 0
             kept_tokens = len(kept_oracle_ids)
             if kept_oracle_ids:
@@ -214,6 +289,7 @@ def main(cfg: Any) -> None:
                         xb += -math.log2(max(pr, eps))
                     token_bits = int(round(xb))
             total_token_bits += token_bits
+
             t0 = time.perf_counter()
             if pos_codec == "rle_elias":
                 _ = rle.decode_rle_elias(pos_payload, ids.numel())
@@ -225,6 +301,7 @@ def main(cfg: Any) -> None:
                 except Exception:
                     pass
             t_payload_ms = (time.perf_counter() - t0) * 1000.0
+
             t1 = time.perf_counter()
             if dec_method == "greedy":
                 recon_text = reconstruct_mlm_text(tok_mlm, mlm, ids, keep_flags_t)
@@ -239,8 +316,10 @@ def main(cfg: Any) -> None:
             else:
                 recon_text = reconstruct_mlm_text(tok_mlm, mlm, ids, keep_flags_t)
             t_mlm_ms = (time.perf_counter() - t1) * 1000.0
+
             cpu_decode_ms = t_payload_ms + t_mlm_ms
             charF = character_level_fidelity(text, recon_text)
+
             doc = {
                 "original": text,
                 "reconstruction": recon_text,
@@ -253,8 +332,10 @@ def main(cfg: Any) -> None:
                 "decoding_method": dec_method,
             }
             fout.write(json.dumps(doc) + "\n")
+
             total_chars += len(text)
             n_docs += 1
+
     summary = {
         "method": "PM",
         "model": mlm_name,
@@ -270,5 +351,8 @@ def main(cfg: Any) -> None:
     log.info(
         f"[stage2_pm] Wrote {recons_path} | bpc={summary['bpc']:.6f} | docs={n_docs} | decode(ms)=payload+mlm"
     )
+
+
 if __name__ == "__main__":
     main()
+

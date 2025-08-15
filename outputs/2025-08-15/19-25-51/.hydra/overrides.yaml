@@ -1,0 +1,4 @@
+- model=bert-base-cased
+- +seed=13
+- +dump_recon=true
+- +experiment=e1a_wiki103
