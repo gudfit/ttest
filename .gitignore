@@ -1,4 +1,4 @@
-artifacts/*
+artifacts/checkpoints/*
 
 __pycache__/
 *.py[codz]

@@ -1,4 +1,6 @@
 # lldc/scripts/sweeps.py
+
+# lldc/scripts/sweeps.py
 from __future__ import annotations
 import hydra
 from typing import Any, List
@@ -17,6 +19,7 @@ from lldc.data.bootstrap import ensure_data
 from lldc.utils.seed import DEFAULT_SEEDS
 from datasets import load_dataset
 from lldc.scripts.channel_analysis import run_channel_analysis
+
 def _extract_hydra_overrides_from_argv(argv: List[str]) -> List[str]:
     forwarded: List[str] = []
     sweeps_only = {"--with-dataset-stats", "--with-latency-flops"}
@@ -27,9 +30,11 @@ def _extract_hydra_overrides_from_argv(argv: List[str]) -> List[str]:
             continue
         forwarded.append(tok)
     return forwarded
+
 def _run_cmd(cmd: List[str]) -> None:
     print(f"[sweeps] $ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
     subprocess.run(cmd, check=True)
+
 def run_post_runners(cfg: Any) -> None:
     hydra_overrides = _extract_hydra_overrides_from_argv(sys.argv)
     argv_tokens = set(sys.argv[1:])
@@ -57,6 +62,7 @@ def run_post_runners(cfg: Any) -> None:
                 *hydra_overrides,
             ]
         )
+
 def _run_module(modname: str, argv: Sequence[str] = ()) -> None:
     # Build a flat list of strings for the child process
     cmd = [sys.executable, "-m", str(modname)]
@@ -75,6 +81,7 @@ def _run_module(modname: str, argv: Sequence[str] = ()) -> None:
         cwd=str(repo_root), # must be str/PathLike, not list
         env=env, # must be dict[str, str]
     )
+
 def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
     out: list[dict] = []
     for p in jsonl_paths:
@@ -85,6 +92,7 @@ def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
                 except Exception:
                     pass
     return out
+
 def main() -> None:
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
@@ -112,7 +120,7 @@ def main() -> None:
                         [
                             f"model={m}",
                             f"+seed={seed}",
-                            "dump_recon=true",
+                            "+dump_recon=true",
                             *hydra_overrides,
                         ],
                     )
@@ -124,7 +132,7 @@ def main() -> None:
                         [
                             f"model={m}",
                             f"+seed={seed}",
-                            "dump_recon=true",
+                            "+dump_recon=true",
                             *hydra_overrides,
                         ],
                     )
@@ -157,7 +165,7 @@ def main() -> None:
                                 [
                                     f"model={m}",
                                     f"model_ckpt={ckpt}",
-                                    "dump_recon=true",
+                                    "+dump_recon=true",
                                     f"+seed={seed}",
                                     *hydra_overrides,
                                 ],
@@ -168,7 +176,7 @@ def main() -> None:
                                 [
                                     f"model={m}",
                                     f"model_ckpt={ckpt}",
-                                    "dump_recon=true",
+                                    "+dump_recon=true",
                                     f"+seed={seed}",
                                     *hydra_overrides,
                                 ],
@@ -191,7 +199,7 @@ def main() -> None:
                             "lldc.scripts.stage2_compress_pm",
                             [
                                 f"model={m}",
-                                "dump_recon=true",
+                                "+dump_recon=true",
                                 f"+seed={seed}",
                                 *hydra_overrides,
                             ],
@@ -201,7 +209,7 @@ def main() -> None:
                             "lldc.scripts.stage2_compress_vq",
                             [
                                 f"model={m}",
-                                "dump_recon=true",
+                                "+dump_recon=true",
                                 f"+seed={seed}",
                                 *hydra_overrides,
                             ],
@@ -231,5 +239,6 @@ def main() -> None:
             log.error(f"Unknown experiment={exp}")
             sys.exit(2)
     _run()
+
 if __name__ == "__main__":
     main()

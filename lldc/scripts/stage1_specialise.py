@@ -1,5 +1,5 @@
 # lldc/scripts/stage1_specialise.py
-# lldc/scripts/stage1_specialise.py
+
 from __future__ import annotations
 from typing import Any
 from pathlib import Path
@@ -86,7 +86,7 @@ def main(cfg: Any) -> None:
     recovery_epochs = _cfg_get(
         cfg,
         "stage1.train.epochs",
-        _cfg_get(cfg, "experiment.stage1.train.epochs", 3),
+        _cfg_get(cfg, "experiment.stage1.train.epochs", 'auto'),
     )
     if recovery_epochs == 'auto':
         recovery_epochs = 3
