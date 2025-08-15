@@ -1,3 +1,0 @@
-- model=bert-base-cased
-- +seed=13
-- +experiment=e1a_wiki103
