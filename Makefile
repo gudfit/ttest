@@ -31,6 +31,10 @@ test-cov:
 test-verbose:
 	uv run pytest -v
 
+# Running experiments
+run-exp:
+	uv run python -m lldc.scripts.sweeps $(ARGS)
+
 # Cleanup
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
