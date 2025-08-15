@@ -1,0 +1,1250 @@
+def f_0(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_1(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_2(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_3(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_4(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_5(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_6(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_7(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_8(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_9(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_10(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_11(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_12(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_13(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_14(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_15(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_16(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_17(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_18(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_19(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_20(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_21(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_22(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_23(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_24(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_25(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_26(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_27(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_28(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_29(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_30(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_31(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_32(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_33(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_34(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_35(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_36(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_37(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_38(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_39(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_40(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_41(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_42(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_43(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_44(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_45(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_46(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_47(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_48(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_49(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_50(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_51(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_52(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_53(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_54(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_55(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_56(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_57(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_58(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_59(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_60(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_61(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_62(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_63(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_64(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_65(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_66(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_67(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_68(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_69(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_70(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_71(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_72(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_73(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_74(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_75(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_76(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_77(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_78(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_79(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_80(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_81(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_82(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_83(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_84(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_85(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_86(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_87(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_88(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_89(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_90(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_91(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_92(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_93(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_94(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_95(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_96(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_97(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_98(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_99(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_100(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_101(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_102(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_103(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_104(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_105(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_106(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_107(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_108(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_109(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_110(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_111(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_112(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_113(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_114(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_115(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_116(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_117(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_118(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_119(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_120(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_121(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_122(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_123(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_124(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_125(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_126(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_127(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_128(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_129(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_130(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_131(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_132(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_133(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_134(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_135(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_136(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_137(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_138(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_139(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_140(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_141(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_142(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_143(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_144(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_145(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_146(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_147(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_148(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_149(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_150(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_151(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_152(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_153(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_154(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_155(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_156(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_157(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_158(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_159(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_160(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_161(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_162(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_163(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_164(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_165(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_166(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_167(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_168(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_169(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_170(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_171(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_172(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_173(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_174(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_175(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_176(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_177(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_178(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_179(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_180(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_181(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_182(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_183(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_184(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_185(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_186(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_187(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_188(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_189(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_190(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_191(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_192(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_193(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_194(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_195(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_196(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_197(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_198(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_199(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_200(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_201(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_202(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_203(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_204(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_205(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_206(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_207(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_208(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_209(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_210(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_211(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_212(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_213(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_214(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_215(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_216(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_217(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_218(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_219(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_220(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_221(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_222(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_223(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_224(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_225(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_226(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_227(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_228(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_229(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_230(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_231(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_232(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_233(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_234(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_235(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_236(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_237(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_238(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_239(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_240(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_241(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_242(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_243(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_244(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_245(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_246(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_247(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_248(x):
+    # compute square then add three
+    return x*x + 3
+
+def f_249(x):
+    # compute square then add three
+    return x*x + 3
+
+Solve: 544 + 434 = ? Explain each step in words.
+Solve: 836 + 320 = ? Explain each step in words.
+Solve: 993 + 384 = ? Explain each step in words.
+Solve: 306 + 188 = ? Explain each step in words.
+Solve: 794 + 732 = ? Explain each step in words.
+Solve: 731 + 563 = ? Explain each step in words.
+Solve: 687 + 294 = ? Explain each step in words.
+Solve: 122 + 949 = ? Explain each step in words.
+Solve: 37 + 264 = ? Explain each step in words.
+Solve: 403 + 844 = ? Explain each step in words.
+Solve: 774 + 439 = ? Explain each step in words.
+Solve: 268 + 890 = ? Explain each step in words.
+Solve: 523 + 831 = ? Explain each step in words.
+Solve: 335 + 665 = ? Explain each step in words.
+Solve: 876 + 710 = ? Explain each step in words.
+Solve: 977 + 751 = ? Explain each step in words.
+Solve: 421 + 150 = ? Explain each step in words.
+Solve: 574 + 73 = ? Explain each step in words.
+Solve: 153 + 842 = ? Explain each step in words.
+Solve: 820 + 906 = ? Explain each step in words.
+Solve: 211 + 164 = ? Explain each step in words.
+Solve: 913 + 732 = ? Explain each step in words.
+Solve: 555 + 582 = ? Explain each step in words.
+Solve: 831 + 988 = ? Explain each step in words.
+Solve: 712 + 225 = ? Explain each step in words.
+Solve: 348 + 562 = ? Explain each step in words.
+Solve: 136 + 913 = ? Explain each step in words.
+Solve: 742 + 664 = ? Explain each step in words.
+Solve: 80 + 326 = ? Explain each step in words.
+Solve: 429 + 93 = ? Explain each step in words.
+Solve: 529 + 972 = ? Explain each step in words.
+Solve: 889 + 495 = ? Explain each step in words.
+Solve: 665 + 624 = ? Explain each step in words.
+Solve: 155 + 708 = ? Explain each step in words.
+Solve: 841 + 428 = ? Explain each step in words.
+Solve: 842 + 528 = ? Explain each step in words.
+Solve: 952 + 354 = ? Explain each step in words.
+Solve: 28 + 453 = ? Explain each step in words.
+Solve: 391 + 595 = ? Explain each step in words.
+Solve: 62 + 928 = ? Explain each step in words.
+Solve: 780 + 766 = ? Explain each step in words.
+Solve: 373 + 61 = ? Explain each step in words.
+Solve: 992 + 498 = ? Explain each step in words.
+Solve: 393 + 603 = ? Explain each step in words.
+Solve: 802 + 15 = ? Explain each step in words.
+Solve: 898 + 425 = ? Explain each step in words.
+Solve: 254 + 129 = ? Explain each step in words.
+Solve: 580 + 228 = ? Explain each step in words.
+Solve: 990 + 264 = ? Explain each step in words.
+Solve: 549 + 990 = ? Explain each step in words.
+Solve: 378 + 69 = ? Explain each step in words.
+Solve: 283 + 75 = ? Explain each step in words.
+Solve: 815 + 292 = ? Explain each step in words.
+Solve: 207 + 775 = ? Explain each step in words.
+Solve: 628 + 858 = ? Explain each step in words.
+Solve: 578 + 555 = ? Explain each step in words.
+Solve: 576 + 933 = ? Explain each step in words.
+Solve: 142 + 266 = ? Explain each step in words.
+Solve: 684 + 324 = ? Explain each step in words.
+Solve: 948 + 366 = ? Explain each step in words.
+Solve: 336 + 184 = ? Explain each step in words.
+Solve: 350 + 106 = ? Explain each step in words.
+Solve: 940 + 598 = ? Explain each step in words.
+Solve: 602 + 811 = ? Explain each step in words.
+Solve: 289 + 353 = ? Explain each step in words.
+Solve: 19 + 61 = ? Explain each step in words.
+Solve: 781 + 366 = ? Explain each step in words.
+Solve: 29 + 488 = ? Explain each step in words.
+Solve: 772 + 289 = ? Explain each step in words.
+Solve: 495 + 658 = ? Explain each step in words.
+Solve: 65 + 756 = ? Explain each step in words.
+Solve: 213 + 327 = ? Explain each step in words.
+Solve: 274 + 86 = ? Explain each step in words.
+Solve: 776 + 742 = ? Explain each step in words.
+Solve: 941 + 506 = ? Explain each step in words.
+Solve: 31 + 645 = ? Explain each step in words.
+Solve: 587 + 547 = ? Explain each step in words.
+Solve: 712 + 151 = ? Explain each step in words.
+Solve: 422 + 506 = ? Explain each step in words.
+Solve: 759 + 984 = ? Explain each step in words.
+Solve: 992 + 614 = ? Explain each step in words.
+Solve: 846 + 410 = ? Explain each step in words.
+Solve: 197 + 210 = ? Explain each step in words.
+Solve: 267 + 993 = ? Explain each step in words.
+Solve: 164 + 702 = ? Explain each step in words.
+Solve: 123 + 939 = ? Explain each step in words.
+Solve: 227 + 61 = ? Explain each step in words.
+Solve: 872 + 559 = ? Explain each step in words.
+Solve: 322 + 834 = ? Explain each step in words.
+Solve: 921 + 952 = ? Explain each step in words.
+Solve: 333 + 840 = ? Explain each step in words.
+Solve: 333 + 60 = ? Explain each step in words.
+Solve: 175 + 958 = ? Explain each step in words.
+Solve: 439 + 105 = ? Explain each step in words.
+Solve: 717 + 799 = ? Explain each step in words.
+Solve: 329 + 869 = ? Explain each step in words.
+Solve: 266 + 683 = ? Explain each step in words.
+Solve: 423 + 501 = ? Explain each step in words.
+Solve: 86 + 565 = ? Explain each step in words.
+Solve: 97 + 566 = ? Explain each step in words.
+Solve: 661 + 257 = ? Explain each step in words.
+Solve: 240 + 555 = ? Explain each step in words.
+Solve: 990 + 281 = ? Explain each step in words.
+Solve: 599 + 177 = ? Explain each step in words.
+Solve: 830 + 312 = ? Explain each step in words.
+Solve: 60 + 752 = ? Explain each step in words.
+Solve: 919 + 508 = ? Explain each step in words.
+Solve: 610 + 412 = ? Explain each step in words.
+Solve: 854 + 508 = ? Explain each step in words.
+Solve: 237 + 577 = ? Explain each step in words.
+Solve: 427 + 538 = ? Explain each step in words.
+Solve: 651 + 465 = ? Explain each step in words.
+Solve: 89 + 480 = ? Explain each step in words.
+Solve: 779 + 233 = ? Explain each step in words.
+Solve: 244 + 504 = ? Explain each step in words.
+Solve: 335 + 849 = ? Explain each step in words.
+Solve: 203 + 382 = ? Explain each step in words.
+Solve: 622 + 39 = ? Explain each step in words.
+Solve: 994 + 772 = ? Explain each step in words.
+Solve: 601 + 591 = ? Explain each step in words.
+Solve: 541 + 442 = ? Explain each step in words.
+Solve: 64 + 924 = ? Explain each step in words.
+Solve: 862 + 346 = ? Explain each step in words.
+Solve: 997 + 602 = ? Explain each step in words.
+Solve: 183 + 962 = ? Explain each step in words.
+Solve: 997 + 579 = ? Explain each step in words.
+Solve: 246 + 637 = ? Explain each step in words.
+Solve: 330 + 386 = ? Explain each step in words.
+Solve: 186 + 782 = ? Explain each step in words.
+Solve: 226 + 320 = ? Explain each step in words.
+Solve: 454 + 374 = ? Explain each step in words.
+Solve: 469 + 615 = ? Explain each step in words.
+Solve: 105 + 541 = ? Explain each step in words.
+Solve: 118 + 545 = ? Explain each step in words.
+Solve: 20 + 206 = ? Explain each step in words.
+Solve: 974 + 599 = ? Explain each step in words.
+Solve: 930 + 730 = ? Explain each step in words.
+Solve: 576 + 793 = ? Explain each step in words.
+Solve: 193 + 470 = ? Explain each step in words.
+Solve: 484 + 466 = ? Explain each step in words.
+Solve: 886 + 526 = ? Explain each step in words.
+Solve: 150 + 559 = ? Explain each step in words.
+Solve: 572 + 496 = ? Explain each step in words.
+Solve: 473 + 22 = ? Explain each step in words.
+Solve: 311 + 279 = ? Explain each step in words.
+Solve: 198 + 18 = ? Explain each step in words.
+Solve: 856 + 933 = ? Explain each step in words.
+Solve: 488 + 355 = ? Explain each step in words.
+Solve: 780 + 346 = ? Explain each step in words.
+Solve: 226 + 63 = ? Explain each step in words.
+Solve: 283 + 110 = ? Explain each step in words.
+Solve: 540 + 693 = ? Explain each step in words.
+Solve: 726 + 25 = ? Explain each step in words.
+Solve: 38 + 125 = ? Explain each step in words.
+Solve: 493 + 737 = ? Explain each step in words.
+Solve: 937 + 318 = ? Explain each step in words.
+Solve: 636 + 218 = ? Explain each step in words.
+Solve: 808 + 111 = ? Explain each step in words.
+Solve: 806 + 940 = ? Explain each step in words.
+Solve: 849 + 867 = ? Explain each step in words.
+Solve: 36 + 476 = ? Explain each step in words.
+Solve: 559 + 850 = ? Explain each step in words.
+Solve: 787 + 956 = ? Explain each step in words.
+Solve: 237 + 898 = ? Explain each step in words.
+Solve: 674 + 40 = ? Explain each step in words.
+Solve: 880 + 419 = ? Explain each step in words.
+Solve: 823 + 135 = ? Explain each step in words.
+Solve: 448 + 988 = ? Explain each step in words.
+Solve: 69 + 766 = ? Explain each step in words.
+Solve: 562 + 71 = ? Explain each step in words.
+Solve: 202 + 561 = ? Explain each step in words.
+Solve: 278 + 285 = ? Explain each step in words.
+Solve: 375 + 365 = ? Explain each step in words.
+Solve: 972 + 566 = ? Explain each step in words.
+Solve: 605 + 849 = ? Explain each step in words.
+Solve: 436 + 425 = ? Explain each step in words.
+Solve: 944 + 17 = ? Explain each step in words.
+Solve: 548 + 778 = ? Explain each step in words.
+Solve: 357 + 92 = ? Explain each step in words.
+Solve: 785 + 777 = ? Explain each step in words.
+Solve: 860 + 823 = ? Explain each step in words.
+Solve: 44 + 651 = ? Explain each step in words.
+Solve: 758 + 895 = ? Explain each step in words.
+Solve: 301 + 343 = ? Explain each step in words.
+Solve: 339 + 130 = ? Explain each step in words.
+Solve: 352 + 140 = ? Explain each step in words.
+Solve: 561 + 867 = ? Explain each step in words.
+Solve: 259 + 955 = ? Explain each step in words.
+Solve: 516 + 851 = ? Explain each step in words.
+Solve: 300 + 463 = ? Explain each step in words.
+Solve: 137 + 271 = ? Explain each step in words.
+Solve: 265 + 85 = ? Explain each step in words.
+Solve: 707 + 440 = ? Explain each step in words.
+Solve: 327 + 711 = ? Explain each step in words.
+Solve: 215 + 504 = ? Explain each step in words.
+Solve: 384 + 141 = ? Explain each step in words.
+Solve: 228 + 526 = ? Explain each step in words.
+Solve: 816 + 595 = ? Explain each step in words.
+Solve: 165 + 813 = ? Explain each step in words.
+Solve: 310 + 95 = ? Explain each step in words.
+Solve: 456 + 458 = ? Explain each step in words.
+Solve: 550 + 928 = ? Explain each step in words.
+Solve: 407 + 809 = ? Explain each step in words.
+Solve: 545 + 628 = ? Explain each step in words.
+Solve: 788 + 931 = ? Explain each step in words.
+Solve: 167 + 689 = ? Explain each step in words.
+Solve: 582 + 156 = ? Explain each step in words.
+Solve: 178 + 610 = ? Explain each step in words.
+Solve: 557 + 968 = ? Explain each step in words.
+Solve: 334 + 515 = ? Explain each step in words.
+Solve: 832 + 904 = ? Explain each step in words.
+Solve: 912 + 298 = ? Explain each step in words.
+Solve: 989 + 965 = ? Explain each step in words.
+Solve: 426 + 77 = ? Explain each step in words.
+Solve: 641 + 251 = ? Explain each step in words.
+Solve: 182 + 933 = ? Explain each step in words.
+Solve: 738 + 164 = ? Explain each step in words.
+Solve: 806 + 251 = ? Explain each step in words.
+Solve: 447 + 570 = ? Explain each step in words.
+Solve: 339 + 563 = ? Explain each step in words.
+Solve: 786 + 463 = ? Explain each step in words.
+Solve: 778 + 523 = ? Explain each step in words.
+Solve: 828 + 141 = ? Explain each step in words.
+Solve: 305 + 971 = ? Explain each step in words.
+Solve: 258 + 517 = ? Explain each step in words.
+Solve: 266 + 524 = ? Explain each step in words.
+Solve: 205 + 391 = ? Explain each step in words.
+Solve: 17 + 660 = ? Explain each step in words.
+Solve: 135 + 353 = ? Explain each step in words.
+Solve: 514 + 88 = ? Explain each step in words.
+Solve: 450 + 98 = ? Explain each step in words.
+Solve: 921 + 537 = ? Explain each step in words.
+Solve: 397 + 259 = ? Explain each step in words.
+Solve: 184 + 82 = ? Explain each step in words.
+Solve: 963 + 313 = ? Explain each step in words.
+Solve: 84 + 305 = ? Explain each step in words.
+Solve: 357 + 938 = ? Explain each step in words.
+Solve: 791 + 483 = ? Explain each step in words.
+Solve: 339 + 162 = ? Explain each step in words.
+Solve: 997 + 163 = ? Explain each step in words.
+Solve: 771 + 282 = ? Explain each step in words.
+Solve: 325 + 402 = ? Explain each step in words.
+Solve: 894 + 343 = ? Explain each step in words.
+Solve: 953 + 598 = ? Explain each step in words.
+Solve: 536 + 657 = ? Explain each step in words.
+Solve: 156 + 456 = ? Explain each step in words.
+Solve: 116 + 981 = ? Explain each step in words.
+Solve: 847 + 783 = ? Explain each step in words.
+Solve: 919 + 679 = ? Explain each step in words.
+Solve: 650 + 802 = ? Explain each step in words.

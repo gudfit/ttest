@@ -94,16 +94,15 @@ class AdaptiveMaskingCollator:
         device = next(self.model.parameters()).device
         mask_id = int(self.tok.mask_token_id)
         input_ids_list = [ids[: self.tok.model_max_length] for ids in input_ids_list]
-
-        masked_inputs: List[torch.Tensor] = []
-        labels_list: List[torch.Tensor] = []
-
+        masked_inputs_cpu: List[torch.Tensor] = []
+        labels_list_cpu: List[torch.Tensor] = []
         with torch.no_grad():
             for ids in input_ids_list:
-                ids = ids.to(device)
-                s_bits = pll_surprisal_scores(ids, self.model, self.tok, mask_id)
+                ids_cpu = ids
+                ids_dev = ids.to(device)
+                s_bits = pll_surprisal_scores(ids_dev, self.model, self.tok, mask_id)
                 to_mask = s_bits <= self.threshold_bits
-                L = ids.size(0)
+                L = ids_cpu.size(0)
                 target_m = max(1, int(round(self.mask_rate * L)))
                 cur_m = int(to_mask.sum().item())
                 if cur_m != target_m and L > 0:
@@ -112,19 +111,19 @@ class AdaptiveMaskingCollator:
                     to_mask = torch.zeros_like(to_mask)
                     to_mask[order[:k]] = True
 
-                masked = ids.clone()
-                masked[to_mask] = mask_id
-                labels = torch.full_like(ids, fill_value=-100)
-                labels[to_mask] = ids[to_mask]
-
-                masked_inputs.append(masked)
-                labels_list.append(labels)
+                to_mask_cpu = to_mask.detach().cpu()
+                masked = ids_cpu.clone()
+                masked[to_mask_cpu] = mask_id
+                labels = torch.full_like(ids_cpu, fill_value=-100)
+                labels[to_mask_cpu] = ids_cpu[to_mask_cpu]
+                masked_inputs_cpu.append(masked)
+                labels_list_cpu.append(labels)
 
         batch_input = torch.nn.utils.rnn.pad_sequence(
-            masked_inputs, batch_first=True, padding_value=self.tok.pad_token_id or 0
+            masked_inputs_cpu, batch_first=True, padding_value=self.tok.pad_token_id or 0
         )
         batch_labels = torch.nn.utils.rnn.pad_sequence(
-            labels_list, batch_first=True, padding_value=-100
+            labels_list_cpu, batch_first=True, padding_value=-100
         )
         attn_mask = (batch_input != (self.tok.pad_token_id or 0)).long()
         return {
@@ -418,7 +417,7 @@ def main() -> None:
             weight_decay=cfg.model.specialise.weight_decay,
             warmup_ratio=cfg.model.specialise.warmup_ratio,
             logging_steps=50,
-            evaluation_strategy="epoch",
+            eval_strategy="epoch",
             save_strategy="epoch",
             save_total_limit=1,
             fp16=(prec == "fp16" and torch.cuda.is_available()),

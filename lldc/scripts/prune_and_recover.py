@@ -107,7 +107,7 @@ def main():
             num_train_epochs=int(recovery_epochs),
             learning_rate=5e-5,
             bf16=torch.cuda.is_available(),
-            evaluation_strategy="no",
+            eval_strategy="no",
             save_strategy="no",
             report_to=[],
         )

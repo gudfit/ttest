@@ -4,22 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lldc"
-version = "0.1.0"
+version = "0.1.1"
 description = "LLMs as Data Compressors: reproducible research code for PM & VQ pipelines"
 authors = [{ name = "Gudfit" }]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "torch",
-  "transformers",
-  "accelerate",
-  "datasets",
-  "tokenizers",
+  "transformers>=4.35,<5",
+  "accelerate>=0.28",
+  "datasets>=2.19",
+  "tokenizers>=0.14",
   "numpy",
   "scipy",
   "tqdm",
   "rich",
-  "evaluate",
+  "evaluate>=0.4",
   "bert-score",
   "sacrebleu",
   "kenlm",

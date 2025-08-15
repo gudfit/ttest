@@ -152,7 +152,7 @@ def train_vq_joint(
         bf16=torch.cuda.is_available(),
         fp16=False,
         logging_steps=50,
-        evaluation_strategy="no",
+        eval_strategy="no",
         save_strategy="no",
         report_to=[],
     )
