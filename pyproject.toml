@@ -22,6 +22,7 @@ dependencies = [
   "evaluate",
   "bert-score",
   "sacrebleu",
+  "kenlm",
   "python-Levenshtein",
   "sentence-transformers",
   "constriction",
