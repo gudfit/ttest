@@ -58,11 +58,9 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
         )
         if method is None:
             continue
-
         recons = sub / "recons.jsonl"
         if not recons.exists():
             continue
-
         mask_rate = None
         codebook_K = None
         m = _MASK_PAT.search(sub.name)
@@ -77,7 +75,6 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
                 codebook_K = int(k.group(1))
             except Exception:
                 codebook_K = None
-
         model = None
         parts = sub.name.split("_")
         if len(parts) >= 2:
@@ -98,7 +95,6 @@ def _scan_payload_dir(payload_root: Path) -> List[RDPoint]:
         decms: List[float] = []
         n_docs = 0
         saw_bit_fields = False
-
         with recons.open("r", encoding="utf-8") as f:
             for ln in f:
                 try:
