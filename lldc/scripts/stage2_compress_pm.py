@@ -1,10 +1,12 @@
 # lldc/scripts/stage2_compress_pm.py
+
 from __future__ import annotations
 from typing import Any, List, Tuple
 import json
 import math
 import time
 from pathlib import Path
+import re
 
 import hydra
 import torch
@@ -51,36 +53,68 @@ def _position_codec(flags: List[bool]) -> Tuple[str, bytes, int]:
         return "bitmask", payload, bm.cost_bits(n)
 
 
+
+_PRUNED_PAT = re.compile(r"_pruned_([0-9]+(?:\.[0-9]+)?)$")
+
+def _parse_prune_level(p: Path) -> float:
+    m = _PRUNED_PAT.search(p.name)
+    if not m:
+        return -1.0
+    try:
+        return float(m.group(1))
+    except Exception:
+        return -1.0
+
+
+def _is_valid_hf_dir(d: Path) -> bool:
+    if not d.exists() or not d.is_dir():
+        return False
+    has_cfg = (d / "config.json").exists()
+    has_weights = (d / "model.safetensors").exists() or (d / "pytorch_model.bin").exists()
+    return has_cfg and has_weights
+
+
 def _find_best_local_ckpt(model_name: str, paths: Paths) -> Path | None:
     root = paths.checkpoints
-    cands = []
-    pat = f"{model_name}_pruned_*"
-    for p in root.glob(pat):
-        if p.is_dir() and (p / "READY").exists():
-            try:
-                mtime = p.stat().st_mtime
-            except Exception:
-                mtime = 0.0
-            cands.append((mtime, p))
+    cands: list[tuple[float, float, Path]] = []
+    for p in root.glob(f"{model_name}_pruned_*"):
+        if not p.is_dir():
+            continue
+        if not (p / "READY").exists():
+            continue
+        if not _is_valid_hf_dir(p):
+            continue
+        level = _parse_prune_level(p)
+        try:
+            mtime = p.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+        cands.append((level, mtime, p))
     if not cands:
         return None
-    cands.sort(key=lambda t: t[0], reverse=True)
-    return cands[0][1]
+    cands.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return cands[0][2]
 
 
-def _resolve_model_source(cfg: Any, model_name: str, paths: Paths) -> str:
+def _resolve_model_source(cfg: Any, model_name: str, paths: Paths, log) -> str:
     explicit = _cfg_get(cfg, "model_ckpt", None)
     if explicit:
         p = Path(str(explicit))
-        if p.exists():
+        if _is_valid_hf_dir(p):
+            log.info(f"[stage2_pm] Using explicit checkpoint: {p}")
             return str(p)
+        else:
+            log.warning(f"[stage2_pm] Ignoring invalid model_ckpt '{explicit}' (missing config/weights).")
 
     if bool(_cfg_get(cfg, "e2a.stage2_reuse", True)):
         best = _find_best_local_ckpt(model_name, paths)
         if best is not None:
+            log.info(f"[stage2_pm] Reusing local checkpoint: {best}")
             return str(best)
 
+    log.info(f"[stage2_pm] Falling back to hub model: {model_name}")
     return model_name
+
 
 
 def _reconstruct_beam(
@@ -196,18 +230,15 @@ def main(cfg: Any) -> None:
     log = setup_logging()
     paths = Paths().ensure()
     device = "cuda" if torch.cuda.is_available() else "cpu"
+
     oracle_name = _cfg_get(cfg, "stage2.pm.arithmetic_coder.oracle_model", "gpt2-xl")
     mlm_name = cfg.model.pretrained_name
-    model_source = _resolve_model_source(cfg, mlm_name, paths)
-    if Path(model_source).exists():
-        log.info(f"[stage2_pm] Loading MLM from checkpoint: {model_source}")
-    else:
-        log.info(f"[stage2_pm] Loading MLM from hub: {model_source}")
-
-    tok_mlm = AutoTokenizer.from_pretrained(model_source if Path(model_source).exists() else mlm_name)
+    model_source = _resolve_model_source(cfg, mlm_name, paths, log)
+    source_path = Path(model_source)
+    tok_load_id = model_source if source_path.exists() else mlm_name
+    tok_mlm = AutoTokenizer.from_pretrained(tok_load_id)
     if tok_mlm.pad_token is None and tok_mlm.eos_token:
         tok_mlm.pad_token = tok_mlm.eos_token
-
     mlm = AutoModelForMaskedLM.from_pretrained(model_source).to(device).eval()
 
     oracle_tok = AutoTokenizer.from_pretrained(oracle_name)

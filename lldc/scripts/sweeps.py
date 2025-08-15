@@ -1,6 +1,5 @@
 # lldc/scripts/sweeps.py
 
-# lldc/scripts/sweeps.py
 from __future__ import annotations
 import hydra
 from typing import Any, List
@@ -64,22 +63,16 @@ def run_post_runners(cfg: Any) -> None:
         )
 
 def _run_module(modname: str, argv: Sequence[str] = ()) -> None:
-    # Build a flat list of strings for the child process
     cmd = [sys.executable, "-m", str(modname)]
-    cmd.extend(str(a) for a in argv) # <- guarantees no nested list/tuples
-    # Run from repo root and ensure configs/ is on PYTHONPATH
-    repo_root = Path(__file__).resolve().parents[2] # adjust if your layout differs
+    cmd.extend(str(a) for a in argv) 
+    repo_root = Path(__file__).resolve().parents[2] 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
-    # (optional) quick sanity checks while debugging
-    # print("CMD:", repr(cmd))
-    # assert all(isinstance(x, str) for x in cmd)
-    # assert isinstance(env["PYTHONPATH"], str)
     subprocess.run(
         cmd,
         check=True,
-        cwd=str(repo_root), # must be str/PathLike, not list
-        env=env, # must be dict[str, str]
+        cwd=str(repo_root), 
+        env=env, 
     )
 
 def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
@@ -92,6 +85,36 @@ def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
                 except Exception:
                     pass
     return out
+
+
+def _best_ready_ckpt(paths: Paths, model_name: str) -> Path | None:
+    root = paths.checkpoints
+    cands: list[tuple[float, float, Path]] = []
+    for p in root.glob(f"{model_name}_pruned_*"):
+        if not p.is_dir():
+            continue
+        if not (p / "READY").exists():
+            continue
+        cfg_ok = (p / "config.json").exists()
+        weights_ok = (p / "model.safetensors").exists() or (p / "pytorch_model.bin").exists()
+        if not (cfg_ok and weights_ok):
+            continue
+        level = -1.0
+        name = p.name
+        try:
+            lvl_str = name.split("_pruned_")[-1]
+            level = float(lvl_str)
+        except Exception:
+            level = -1.0
+        try:
+            mtime = p.stat().st_mtime
+        except Exception:
+            mtime = 0.0
+        cands.append((level, mtime, p))
+    if not cands:
+        return None
+    cands.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return cands[0][2]
 
 def main() -> None:
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
@@ -114,16 +137,25 @@ def main() -> None:
                     )
             for seed in seed_list:
                 for m in mg.get("mlm", []):
-                    log.info(f"[sweeps:e1a] Stage2 PM {m} (seed={seed})")
-                    _run_module(
-                        "lldc.scripts.stage2_compress_pm",
-                        [
+                    ckpt = _best_ready_ckpt(paths, m)
+                    if ckpt is not None:
+                        log.info(f"[sweeps:e1a] Stage2 PM {m} (seed={seed}) using ckpt={ckpt}")
+                        args = [
+                            f"model={m}",
+                            f"+seed={seed}",
+                            f"model_ckpt={ckpt}",
+                            "+dump_recon=true",
+                            *hydra_overrides,
+                        ]
+                    else:
+                        log.warning(f"[sweeps:e1a] No local checkpoint found for {m}; using hub weights.")
+                        args = [
                             f"model={m}",
                             f"+seed={seed}",
                             "+dump_recon=true",
                             *hydra_overrides,
-                        ],
-                    )
+                        ]
+                    _run_module("lldc.scripts.stage2_compress_pm", args)
             for seed in seed_list:
                 for m in mg.get("ar", []):
                     log.info(f"[sweeps:e1a] Stage2 VQ {m} (seed={seed})")
@@ -242,3 +274,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
