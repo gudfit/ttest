@@ -9,19 +9,25 @@ from lldc.models.vq.vq_trainer import (
     train_index_lm,
     cross_entropy_bits_index_stream,
 )
+
 def compress_dataset_with_vq(cfg: Any) -> Dict[str, float]:
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    base_model = (
+        str(getattr(cfg, "model_ckpt", "")).strip()
+        or str(getattr(getattr(cfg, "model", None), "ckpt", "")).strip()
+        or str(cfg.model.pretrained_name)
+    )
     model, tok = train_vq_joint(
-        base_model_name=cfg.model.pretrained_name,
+        base_model_name=base_model,
         dataset_name=cfg.data.source.hf_dataset,
         dataset_config=cfg.data.source.hf_config,
         text_field=cfg.data.processing.text_field,
         max_length=cfg.data.processing.max_length,
-        layer_after=cfg.experiment.stage2.vq.bottleneck.layer_after,
-        codebook_size=int(cfg.experiment.stage2.vq.codebook_sizes[0]),
+        layer_after=cfg.stage2.vq.bottleneck.layer_after,
+        codebook_size=int(cfg.stage2.vq.codebook_sizes[0]),
         lr=5e-5,
-        epochs=int(getattr(cfg.experiment.stage2.vq.index_lm, "epochs", 2) or 2),
-        beta=cfg.experiment.stage2.vq.bottleneck.commitment_beta,
+        epochs=int(getattr(cfg.stage2.vq.index_lm, "epochs", 2) or 2),
+        beta=cfg.stage2.vq.bottleneck.commitment_beta,
     )
     model.eval().to(device)
     ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
@@ -43,13 +49,13 @@ def compress_dataset_with_vq(cfg: Any) -> Dict[str, float]:
         seq_idx = encode_indices(model, ids)[0].tolist()
         if seq_idx:
             idx_train.append(seq_idx)
-    K = int(cfg.experiment.stage2.vq.codebook_sizes[0])
+    K = int(cfg.stage2.vq.codebook_sizes[0])
     lm = train_index_lm(
         idx_train,
         K=K,
-        hidden=int(cfg.experiment.stage2.vq.index_lm.hidden_size),
-        layers=int(cfg.experiment.stage2.vq.index_lm.layers),
-        epochs=int(cfg.experiment.stage2.vq.index_lm.epochs),
+        hidden=int(cfg.stage2.vq.index_lm.hidden_size),
+        layers=int(cfg.stage2.vq.index_lm.layers),
+        epochs=int(cfg.stage2.vq.index_lm.epochs),
     )
     total_bits = 0.0
     total_tokens = 0
@@ -77,3 +83,4 @@ def compress_dataset_with_vq(cfg: Any) -> Dict[str, float]:
         "bpt": float(bpt),
         "bpc": float(bpc),
     }
+

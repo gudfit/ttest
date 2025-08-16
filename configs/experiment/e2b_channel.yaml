@@ -6,7 +6,7 @@ experiment:
   name: e2b_channel
 
   model_groups:
-    mlm: [roberta-base, bert-base-cased, distilroberta]
+    mlm: [roberta-base, bert-base-cased, distilroberta-base]
     ar: [gpt2, gpt2-medium, gpt2-large]
 
 defaults:
@@ -54,4 +54,3 @@ replication:
 outputs:
   write_rd_curves: true
   write_tables: true
-

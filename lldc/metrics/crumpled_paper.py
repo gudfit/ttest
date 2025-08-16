@@ -13,14 +13,13 @@ from transformers import (
     PreTrainedTokenizerBase,
 )
 
-
 @dataclass
 class Oracle:
     name: str = "gpt2-large"
     device: str = "cuda"
 
     def __post_init__(self):
-        self.tok = AutoTokenizer.from_pretrained(self.name)
+        self.tok = AutoTokenizer.from_pretrained(self.name, use_fast=True)
         self.m = AutoModelForCausalLM.from_pretrained(self.name).to(self.device).eval()
         self.vocab_size = int(getattr(self.m.config, "vocab_size", len(self.tok)))
 
@@ -39,7 +38,6 @@ class Oracle:
         bits = (nats / math.log(2.0)).tolist()
         return ids.tolist(), [float(x) for x in bits]
 
-
 class OracleEnsemble:
     def __init__(
         self,
@@ -51,11 +49,11 @@ class OracleEnsemble:
         self.device = device
         self._members: List[tuple[PreTrainedTokenizerBase, AutoModelForCausalLM]] = []
         for nm in names:
-            tok = AutoTokenizer.from_pretrained(nm)
+            tok = AutoTokenizer.from_pretrained(nm, use_fast=True)
             m = AutoModelForCausalLM.from_pretrained(nm).to(device).eval()
             self._members.append((tok, m))
         if measuring_tokenizer and measuring_tokenizer != "oracle":
-            self.measure_tok = AutoTokenizer.from_pretrained(measuring_tokenizer)
+            self.measure_tok = AutoTokenizer.from_pretrained(measuring_tokenizer, use_fast=True)
         else:
             self.measure_tok = self._members[0][0]
         self.vocab_size = int(
@@ -88,14 +86,11 @@ class OracleEnsemble:
                 )
             ids = enc["input_ids"][0].to(model.device)
             offs = enc["offset_mapping"][0].tolist()
-
             if ids.numel() == 0:
                 continue
-
             logits = model(input_ids=ids.unsqueeze(0)).logits[0]
             if ids.size(0) < 2:
                 continue
-
             logp = F.log_softmax(logits[:-1], dim=-1)
             true_next = ids[1:].unsqueeze(-1)
             nats = -logp.gather(-1, true_next).squeeze(-1)
@@ -128,29 +123,20 @@ class OracleEnsemble:
                 m_bits.append(float(seg.mean().item()))
             else:
                 m_bits.append(0.0)
-
         return list(m_ids), m_bits
-
 
 def _needleman_wunsch_cost(
     a_s: List[float], b_s: List[float], gap_cost: float
 ) -> Tuple[float, List[Tuple[int, int]]]:
-    """
-    Align two surprisal sequences with global NW:
-      - match/mismatch cost = |a_s[i] - b_s[j]|
-      - gap cost = gap_cost per gap symbol
-    """
     n, m = len(a_s), len(b_s)
     dp = [[0.0] * (m + 1) for _ in range(n + 1)]
     bt = [[(0, 0)] * (m + 1) for _ in range(n + 1)]
-
     for i in range(1, n + 1):
         dp[i][0] = i * gap_cost
         bt[i][0] = (i - 1, 0)
     for j in range(1, m + 1):
         dp[0][j] = j * gap_cost
         bt[0][j] = (0, j - 1)
-
     for i in range(1, n + 1):
         for j in range(1, m + 1):
             c_sub = dp[i - 1][j - 1] + abs(a_s[i - 1] - b_s[j - 1])
@@ -165,7 +151,6 @@ def _needleman_wunsch_cost(
             else:
                 dp[i][j] = c_ins
                 bt[i][j] = (i, j - 1)
-
     path: List[Tuple[int, int]] = []
     i, j = n, m
     while i > 0 or j > 0:
@@ -182,29 +167,21 @@ def _needleman_wunsch_cost(
     path.reverse()
     return dp[n][m], path
 
-
 def _needleman_wunsch_tokens(
     ids_a: List[int],
     ids_b: List[int],
     gap_cost: float = 1.0,
     mismatch_cost: float = 1.0,
 ) -> List[Tuple[int, int]]:
-    """
-    Token alignment using a classic global NW scheme:
-      - substitution cost = 0 if tokens equal else mismatch_cost
-      - gap cost = gap_cost
-    """
     n, m = len(ids_a), len(ids_b)
     dp = [[0.0] * (m + 1) for _ in range(n + 1)]
     bt = [[(0, 0)] * (m + 1) for _ in range(n + 1)]
-
     for i in range(1, n + 1):
         dp[i][0] = i * gap_cost
         bt[i][0] = (i - 1, 0)
     for j in range(1, m + 1):
         dp[0][j] = j * gap_cost
         bt[0][j] = (0, j - 1)
-
     for i in range(1, n + 1):
         for j in range(1, m + 1):
             sub = 0.0 if ids_a[i - 1] == ids_b[j - 1] else mismatch_cost
@@ -220,7 +197,6 @@ def _needleman_wunsch_tokens(
             else:
                 dp[i][j] = c_ins
                 bt[i][j] = (i, j - 1)
-
     path: List[Tuple[int, int]] = []
     i, j = n, m
     while i > 0 or j > 0:
@@ -237,14 +213,12 @@ def _needleman_wunsch_tokens(
     path.reverse()
     return path
 
-
 def tcm_pcm_from_texts(
     orig: str, recon: str, oracle: Oracle | OracleEnsemble
 ) -> Dict[str, float]:
     _, s0 = oracle.surprisal_bits(orig)
     _, s1 = oracle.surprisal_bits(recon)
     return tcm_pcm_from_surprisal(s0, s1, vocab_size=oracle.vocab_size)
-
 
 def tcm_pcm_from_surprisal(
     s0: List[float], s1: List[float], vocab_size: int
@@ -262,7 +236,6 @@ def tcm_pcm_from_surprisal(
         pcm = max(pcm, c)
     return {"tcm_bits": float(tcm), "pcm_bits": float(pcm)}
 
-
 @torch.no_grad()
 def _pll_log2_at_pos(
     model: AutoModelForMaskedLM,
@@ -271,7 +244,6 @@ def _pll_log2_at_pos(
     pos: int,
     target_id: int,
 ) -> float:
-    """Compute log2 P(target_id | context) by masking `pos` and scoring under MLM."""
     device = next(model.parameters()).device
     ids = seq_ids.clone().to(device)
     if pos < 0 or pos >= ids.numel():
@@ -286,7 +258,6 @@ def _pll_log2_at_pos(
     logp = F.log_softmax(out, dim=-1)[int(target_id)]
     return float(logp.item() / math.log(2.0))
 
-
 def delta_log_likelihood_bits(
     original_text: str,
     reconstructed_text: str,
@@ -300,7 +271,6 @@ def delta_log_likelihood_bits(
     )
     idsA = encA["input_ids"][0].to(device)
     idsB = encB["input_ids"][0].to(device)
-
     a_ids_list: List[int] = [int(x) for x in idsA.tolist()]
     b_ids_list: List[int] = [int(x) for x in idsB.tolist()]
     path = _needleman_wunsch_tokens(
@@ -311,11 +281,10 @@ def delta_log_likelihood_bits(
         if i < 0 or j < 0:
             continue
         tok_id = a_ids_list[i]
-
         pll_orig = _pll_log2_at_pos(bi_model, bi_tokenizer, idsA, i, tok_id)
         pll_recon_ctx = _pll_log2_at_pos(bi_model, bi_tokenizer, idsB, j, tok_id)
         diffs.append(pll_orig - pll_recon_ctx)
-
     if not diffs:
         return 0.0
     return float(sum(diffs) / len(diffs))
+

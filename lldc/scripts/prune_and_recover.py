@@ -17,6 +17,9 @@ from transformers import (
     DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
+    GPT2LMHeadModel,
+    BertForMaskedLM,
+    RobertaForMaskedLM,
 )
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
@@ -172,6 +175,62 @@ def _resolve_recovery_hparams(
         "severity": float(severity),
     }
 
+def _greatest_divisor_leq(n: int, cap: int) -> int:
+    m = min(cap, n)
+    for d in range(m, 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+def _update_config_after_pruning(model: torch.nn.Module, model_name: str, arch: str, log):
+    """
+    Inspects the pruned model and updates its config object with the new layer dimensions.
+    This is CRITICAL for correctly reloading the pruned model later.
+    """
+    if not hasattr(model, "config"):
+        log.warning("[prune] Model has no 'config' attribute to update.")
+        return
+
+    try:
+        if arch == "ar" and isinstance(model, (GPT2LMHeadModel)):
+            first_block = model.transformer.h[0]
+            
+            new_n_head = first_block.attn.num_heads
+            if model.config.n_head != new_n_head:
+                log.info(f"[prune] Updating config: n_head {model.config.n_head} -> {new_n_head}")
+                model.config.n_head = new_n_head
+
+            if hasattr(first_block.mlp, 'c_fc'): 
+                new_n_inner = first_block.mlp.c_fc.weight.shape[-1]
+            else: 
+                new_n_inner = first_block.mlp.fc_in.out_features
+                
+            if hasattr(model.config, "n_inner") and model.config.n_inner != new_n_inner:
+                log.info(f"[prune] Updating config: n_inner {model.config.n_inner} -> {new_n_inner}")
+                model.config.n_inner = new_n_inner
+            elif not hasattr(model.config, "n_inner"):
+                 log.info(f"[prune] Setting config: n_inner -> {new_n_inner}")
+                 model.config.n_inner = new_n_inner
+
+        elif arch == "mlm" and isinstance(model, (BertForMaskedLM, RobertaForMaskedLM)):
+            first_layer = model.bert.encoder.layer[0]
+
+            new_n_head = first_layer.attention.self.num_attention_heads
+            if model.config.num_attention_heads != new_n_head:
+                log.info(f"[prune] Updating config: num_attention_heads {model.config.num_attention_heads} -> {new_n_head}")
+                model.config.num_attention_heads = new_n_head
+
+            new_intermediate_size = first_layer.intermediate.dense.out_features
+            if model.config.intermediate_size != new_intermediate_size:
+                log.info(f"[prune] Updating config: intermediate_size {model.config.intermediate_size} -> {new_intermediate_size}")
+                model.config.intermediate_size = new_intermediate_size
+        else:
+            log.warning(f"[prune] Config update logic not implemented for model type: {type(model).__name__}")
+
+    except Exception as e:
+        log.error(f"[prune] Failed to update model config after pruning. This will likely cause loading errors. Error: {e}", exc_info=True)
+
+
 @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
 def main(cfg: Any) -> None:
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
@@ -241,6 +300,9 @@ def main(cfg: Any) -> None:
         model, level=level, drop_heads=drop_heads, drop_ffn=drop_ffn
     )
     log.info(f"[prune] {model_name} @ level={level} → dropped={dropped}")
+    
+    _update_config_after_pruning(model, model_name, arch, log)
+
     ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
     text_field = cfg.data.processing.text_field
     def tok_fn(b):
@@ -266,8 +328,7 @@ def main(cfg: Any) -> None:
         per_device_batch_size=2,
     )
     log.info(
-        "[recover/auto] severity=%.3f, target_updates=%d, steps/epoch=%d → epochs=%d, "
-        "lr=%.2e, warmup_ratio=%.3f, scheduler=%s",
+        "[recover/auto] severity=%.3f, target_updates=%d, steps/epoch=%d → epochs=%d, lr=%.2e, warmup_ratio=%.3f, scheduler=%s",
         resolved["severity"],
         resolved["target_updates"],
         resolved["steps_per_epoch"],

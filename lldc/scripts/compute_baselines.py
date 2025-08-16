@@ -46,7 +46,7 @@ def main():
                 train_texts,
                 test_texts,
                 workdir="artifacts/runs/kenlm_8gram_baseline",
-                order=8,
+                order=6,
                 pruning="0 0 1",
             )
             results["kenlm_8gram"] = {"bpc": float(bpc8), "status": "ok"}

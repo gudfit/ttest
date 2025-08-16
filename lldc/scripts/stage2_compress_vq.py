@@ -56,24 +56,24 @@ def main(cfg: Any) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     base_model_name = _resolve_base_model_name(cfg, paths)
-    K = int(_cfg_get(cfg, "stage2.vq.codebook_sizes.0", 256))
+    K = int(_cfg_get(cfg, "experiment.stage2.vq.codebook_sizes.0", 256))
     exp_name = str(getattr(getattr(cfg, "experiment", {}), "name", "default"))
-    force_retrain = bool(_cfg_get(cfg, "stage2.vq.force_retrain", False))
+    force_retrain = bool(_cfg_get(cfg, "experiment.stage2.vq.force_retrain", False))
 
     safe_model_name = Path(base_model_name).name if Path(base_model_name).exists() else base_model_name.replace("/", "-")
     cache_dir = paths.checkpoints / f"vq_cache/{exp_name}/{safe_model_name}_K{K}"
     vq_model_path = cache_dir / "vq_model.pt"
     idx_lm_path = cache_dir / "idx_lm.pt"
     tok_path = cache_dir
-    
+   
     if not force_retrain and vq_model_path.exists() and idx_lm_path.exists() and (tok_path / "tokenizer.json").exists():
         log.info(f"[stage2_vq] Loading cached VQ model and index LM from {cache_dir}")
         base_model = AutoModelForCausalLM.from_pretrained(base_model_name)
-        model_vq = _build_vq_wrapper(base_model, layer_after=int(_cfg_get(cfg, "stage2.vq.bottleneck.layer_after", 6)), codebook_size=K, beta=float(_cfg_get(cfg, "stage2.vq.bottleneck.commitment_beta", 0.25)))
+        model_vq = _build_vq_wrapper(base_model, layer_after=int(_cfg_get(cfg, "experiment.stage2.vq.bottleneck.layer_after", 6)), codebook_size=K, beta=float(_cfg_get(cfg, "experiment.stage2.vq.bottleneck.commitment_beta", 0.25)))
         model_vq.load_state_dict(torch.load(vq_model_path, map_location=device))
         model_vq.to(device).eval()
         tok = AutoTokenizer.from_pretrained(tok_path)
-        lm = _IndexGRULM(K=K, hidden=int(_cfg_get(cfg, "stage2.vq.index_lm.hidden_size", 512)), layers=int(_cfg_get(cfg, "stage2.vq.index_lm.layers", 1)))
+        lm = _IndexGRULM(K=K, hidden=int(_cfg_get(cfg, "experiment.stage2.vq.index_lm.hidden_size", 512)), layers=int(_cfg_get(cfg, "experiment.stage2.vq.index_lm.layers", 1)))
         lm.load_state_dict(torch.load(idx_lm_path, map_location=device))
         lm.to(device).eval()
     else:
@@ -82,12 +82,12 @@ def main(cfg: Any) -> None:
         split_map = cfg.data.source.split_map
         text_field = cfg.data.processing.text_field
         train_split = ds[split_map.train]
-        
-        layer_after = int(_cfg_get(cfg, "stage2.vq.bottleneck.layer_after", 6))
-        beta = float(_cfg_get(cfg, "stage2.vq.bottleneck.commitment_beta", 0.25))
-        idx_hidden = int(_cfg_get(cfg, "stage2.vq.index_lm.hidden_size", 512))
-        idx_layers = int(_cfg_get(cfg, "stage2.vq.index_lm.layers", 1))
-        idx_epochs = int(_cfg_get(cfg, "stage2.vq.index_lm.epochs", 2))
+       
+        layer_after = int(_cfg_get(cfg, "experiment.stage2.vq.bottleneck.layer_after", 6))
+        beta = float(_cfg_get(cfg, "experiment.stage2.vq.bottleneck.commitment_beta", 0.25))
+        idx_hidden = int(_cfg_get(cfg, "experiment.stage2.vq.index_lm.hidden_size", 512))
+        idx_layers = int(_cfg_get(cfg, "experiment.stage2.vq.index_lm.layers", 1))
+        idx_epochs = int(_cfg_get(cfg, "experiment.stage2.vq.index_lm.epochs", 2))
 
         joint_train_epochs = 3
         if "e2a_pruning" in exp_name:
@@ -110,6 +110,7 @@ def main(cfg: Any) -> None:
             log.info(f"[stage2_vq] Using default {joint_train_epochs} epochs for joint training (fair for e1a).")
 
         max_train_for_vq = _limit(_cfg_get(cfg, "data.limits.max_train_samples"), 10000)
+        
         model_vq, tok = train_vq_joint(
             base_model_name=base_model_name,
             dataset_name=cfg.data.source.hf_dataset,
@@ -136,9 +137,9 @@ def main(cfg: Any) -> None:
             if ids.numel() == 0 or ids.shape[-1] == 0: continue
             seq_idx = encode_indices(model_vq, ids)[0].tolist()
             if seq_idx: idx_train.append(seq_idx)
-        
+       
         lm = train_index_lm(idx_train, K=K, hidden=idx_hidden, layers=idx_layers, epochs=idx_epochs).to(device).eval()
-        
+       
         cache_dir.mkdir(parents=True, exist_ok=True)
         torch.save(model_vq.state_dict(), vq_model_path)
         torch.save(lm.state_dict(), idx_lm_path)
@@ -151,7 +152,7 @@ def main(cfg: Any) -> None:
     max_eval = _limit(getattr(getattr(cfg, "data", {}), "limits", {}).get("max_eval_samples"), 2000)
     if len(test_split) > max_eval:
         test_split = test_split.select(range(max_eval))
-    
+   
     if "e2a_pruning" in exp_name:
         prune_level_str = Path(base_model_name).name.split("_pruned_")[1].split("_seed")[0]
         payload_dir_name = f"vq_{exp_name}_{cfg.model.pretrained_name.replace('/', '-')}_K{K}_level{prune_level_str}"

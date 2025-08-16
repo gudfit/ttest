@@ -573,10 +573,10 @@ def main():
                 train_texts,
                 test_texts,
                 workdir="artifacts/runs/kenlm_8gram_eval",
-                order=8,
+                order=6,
             )
             (paths.results / "ngram8_baseline.json").write_text(
-                json.dumps({"order": 8, "bpc": bpc8}, indent=2)
+                json.dumps({"order": 6, "bpc": bpc8}, indent=2)
             )
         except Exception as e:
             (paths.results / "ngram8_baseline.json").write_text(

@@ -1,16 +1,7 @@
-# @package _global_
 name: e1a_wiki103
 
-defaults:
-  - override /data: wikitext-103
-  - override /model: roberta-base
-  - override /eval:
-      - efficiency
-      - fidelity
-      - crumpled_paper
-
 model_groups:
-  mlm: [roberta-base, bert-base-cased, distilroberta]
+  mlm: [roberta-base, bert-base-cased, distilroberta-base]
   ar: [gpt2, gpt2-medium, gpt2-large]
 
 stage1:
@@ -48,7 +39,7 @@ stage2:
   vq:
     enabled: true
     models: ${model_groups.ar}
-    codebook_sizes: [256, 512, 1024, 2048, 4096, 8192]
+    codebook_sizes: [256, 512, 1024, 2048]
     bottleneck:
       layer_after: 6
       shared_codebook: true

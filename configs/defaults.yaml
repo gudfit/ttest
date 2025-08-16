@@ -13,7 +13,7 @@ experiment:
   seeds: 5
   static_bits_override: 0
   model_groups:
-    mlm: [bert-base-cased, roberta-base, distilroberta]
+    mlm: [bert-base-cased, roberta-base, distilroberta-base]
     ar: [gpt2, gpt2-medium, gpt2-large]
 
 logging:
