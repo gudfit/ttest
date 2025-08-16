@@ -142,8 +142,8 @@ def main() -> None:
                                 f"model={m}",
                                 f"+seed={seed}",
                                 "+dump_recon=true",
-                                f"stage2.pm.policy={strategy}",
-                                f"stage2.pm.keep_fraction={1.0 - rate}",
+                                f"+stage2.pm.policy={strategy}",
+                                f"+stage2.pm.keep_fraction={1.0 - rate}",
                             ]
                             if ckpt:
                                 args.append(f"+model_ckpt={ckpt}")
@@ -159,7 +159,7 @@ def main() -> None:
                                 f"model={m}",
                                 f"+seed={seed}",
                                 "+dump_recon=true",
-                                f"experiment.stage2.vq.codebook_sizes=[{k}]",
+                                f"+experiment.stage2.vq.codebook_sizes=[{k}]",
                                 *hydra_overrides,
                             ],
                         )
@@ -198,8 +198,8 @@ def main() -> None:
                                         f"model={m}",
                                         f"+seed={seed}",
                                         "+dump_recon=true",
-                                        f"stage2.pm.policy={strategy}",
-                                        f"stage2.pm.keep_fraction={1.0 - rate}",
+                                        f"+stage2.pm.policy={strategy}",
+                                        f"+stage2.pm.keep_fraction={1.0 - rate}",
                                     ]
                                     if ckpt_path is not None:
                                         log.info(f"[sweeps:e2a] Stage2 PM {m} level={lvl} strategy={strategy} rate={rate} using ckpt={ckpt_path}")
@@ -214,7 +214,7 @@ def main() -> None:
                                     f"model={m}",
                                     f"+seed={seed}",
                                     "+dump_recon=true",
-                                    f"experiment.stage2.vq.codebook_sizes=[{k}]",
+                                    f"+experiment.stage2.vq.codebook_sizes=[{k}]",
                                 ]
                                 if ckpt_path is not None:
                                     log.info(f"[sweeps:e2a] Stage2 VQ {m} level={lvl} K={k} using ckpt={ckpt_path}")
