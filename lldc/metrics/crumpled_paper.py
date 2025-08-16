@@ -25,7 +25,8 @@ class Oracle:
 
     @torch.no_grad()
     def surprisal_bits(self, text: str) -> Tuple[List[int], List[float]]:
-        enc = self.tok(text, add_special_tokens=False, return_tensors="pt").to(
+        model_max_length = self.m.config.max_position_embeddings
+        enc = self.tok(text, add_special_tokens=False, return_tensors="pt", truncation=True, max_length=model_max_length).to(
             self.device
         )
         ids = enc["input_ids"][0]
@@ -74,11 +75,14 @@ class OracleEnsemble:
         acc = torch.zeros(L_chars, dtype=torch.float32, device="cpu")
         cnt = torch.zeros(L_chars, dtype=torch.float32, device="cpu")
         for tok, model in self._members:
+            model_max_length = model.config.max_position_embeddings
             enc = tok(
                 text,
                 add_special_tokens=False,
                 return_tensors="pt",
                 return_offsets_mapping=True,
+                truncation=True,
+                max_length=model_max_length,
             )
             if "offset_mapping" not in enc:
                 raise RuntimeError(
@@ -106,10 +110,13 @@ class OracleEnsemble:
         avg_chars = torch.zeros_like(acc)
         mask = cnt > 0
         avg_chars[mask] = acc[mask] / cnt[mask]
+        measure_tok_max_length = self._members[0][1].config.max_position_embeddings
         m_enc = self.measure_tok(
             text,
             add_special_tokens=False,
             return_offsets_mapping=True,
+            truncation=True,
+            max_length=measure_tok_max_length,
         )
         m_ids = m_enc["input_ids"]
         m_offs = m_enc["offset_mapping"]
@@ -287,4 +294,3 @@ def delta_log_likelihood_bits(
     if not diffs:
         return 0.0
     return float(sum(diffs) / len(diffs))
-

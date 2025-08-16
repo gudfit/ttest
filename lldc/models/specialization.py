@@ -1,6 +1,6 @@
 # lldc/models/specialization.py
 
-from __future__ import annotations
+from __future-- import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Literal
 import torch
@@ -47,7 +47,7 @@ def prune_gpt2_mlp_block(mlp: nn.Module, keep_mask: torch.Tensor):
         if getattr(c_fc, "bias", None) is not None:
             c_fc.bias = nn.Parameter(c_fc.bias[keep_mask].clone())
         c_proj.weight = nn.Parameter(c_proj.weight[keep_mask, :].clone())
-    
+
     new_nf = int(keep_mask.sum().item())
     if hasattr(c_fc, 'nf'):
         c_fc.nf = new_nf
@@ -149,12 +149,20 @@ def structured_prune(
                 if attn is None or not hasattr(attn, "prune_heads"):
                     continue
                 sal = head_saliency(attn)
-                H = sal.numel()
+                H = attn.num_heads
                 k_drop = int(level * H)
                 if k_drop <= 0 or k_drop >= H:
                     continue
-                thr = torch.topk(sal, k_drop, largest=False).values.max()
-                to_drop = [int(i) for i, v in enumerate(sal) if v <= thr]
+                embed_dim = attn.embed_dim
+                target_k_keep = H - k_drop
+                divisors = [i for i in range(1, H + 1) if embed_dim % i == 0]
+                if not divisors:
+                    continue
+                k_keep = min(divisors, key=lambda x: abs(x - target_k_keep))
+                new_k_drop = H - k_keep
+                if new_k_drop <= 0:
+                    continue
+                to_drop = torch.topk(sal, new_k_drop, largest=False).indices.tolist()
                 if not to_drop:
                     continue
                 attn.prune_heads(set(to_drop))

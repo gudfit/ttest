@@ -131,39 +131,38 @@ def main() -> None:
                         "lldc.scripts.stage1_specialise",
                         [f"model={m}", f"+seed={seed}", *hydra_overrides],
                     )
+            pm_cfg = cfg.experiment.stage2.pm
             for seed in seed_list:
                 for m in mg.get("mlm", []):
-                    ckpt = _best_ready_ckpt(paths, m, experiment_name=exp)
-                    if ckpt is not None:
-                        log.info(f"[sweeps:e1a] Stage2 PM {m} (seed={seed}) using ckpt={ckpt}")
-                        args = [
-                            f"model={m}",
-                            f"+seed={seed}",
-                            f"+model_ckpt={ckpt}",
-                            "+dump_recon=true",
-                            *hydra_overrides,
-                        ]
-                    else:
-                        log.warning(f"[sweeps:e1a] No local checkpoint found for {m}; using hub weights.")
-                        args = [
-                            f"model={m}",
-                            f"+seed={seed}",
-                            "+dump_recon=true",
-                            *hydra_overrides,
-                        ]
-                    _run_module("lldc.scripts.stage2_compress_pm", args)
+                    for strategy in pm_cfg.strategies:
+                        for rate in pm_cfg.mask_rates:
+                            ckpt = _best_ready_ckpt(paths, m, experiment_name=exp)
+                            log.info(f"[sweeps:e1a] Stage2 PM {m} (seed={seed}, strategy={strategy}, mask_rate={rate})")
+                            args = [
+                                f"model={m}",
+                                f"+seed={seed}",
+                                "+dump_recon=true",
+                                f"stage2.pm.policy={strategy}",
+                                f"stage2.pm.keep_fraction={1.0 - rate}",
+                            ]
+                            if ckpt:
+                                args.append(f"+model_ckpt={ckpt}")
+                            _run_module("lldc.scripts.stage2_compress_pm", [*args, *hydra_overrides])
+            vq_cfg = cfg.experiment.stage2.vq
             for seed in seed_list:
                 for m in mg.get("ar", []):
-                    log.info(f"[sweeps:e1a] Stage2 VQ {m} (seed={seed})")
-                    _run_module(
-                        "lldc.scripts.stage2_compress_vq",
-                        [
-                            f"model={m}",
-                            f"+seed={seed}",
-                            "+dump_recon=true",
-                            *hydra_overrides,
-                        ],
-                    )
+                    for k in vq_cfg.codebook_sizes:
+                        log.info(f"[sweeps:e1a] Stage2 VQ {m} (seed={seed}, K={k})")
+                        _run_module(
+                            "lldc.scripts.stage2_compress_vq",
+                            [
+                                f"model={m}",
+                                f"+seed={seed}",
+                                "+dump_recon=true",
+                                f"experiment.stage2.vq.codebook_sizes=[{k}]",
+                                *hydra_overrides,
+                            ],
+                        )
             _run_module("lldc.scripts.compute_baselines", [*hydra_overrides])
             _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
             run_post_runners(cfg)
@@ -185,35 +184,44 @@ def main() -> None:
                                 *hydra_overrides,
                             ],
                         )
-                        ckpt_path = _best_ready_ckpt(paths, m, experiment_name=exp)
-                        if ckpt_path is None:
-                            exp_name = cfg.experiment.name
-                            ckpt_guess = paths.checkpoints / exp_name / f"{m}_pruned_{lvl}_seed{seed}"
-                            ckpt_path = ckpt_guess if ckpt_guess.exists() else None
+                        ckpt_path = None
+                        exp_name = cfg.experiment.name
+                        ckpt_guess = paths.checkpoints / exp_name / f"{m}_pruned_{lvl}_seed{seed}"
+                        if ckpt_guess.exists():
+                            ckpt_path = ckpt_guess
+
                         if arch == "mlm":
-                            args = [
-                                f"model={m}",
-                                f"+seed={seed}",
-                                "+dump_recon=true",
-                            ]
-                            if ckpt_path is not None:
-                                log.info(f"[sweeps:e2a] Stage2 PM {m} level={lvl} using ckpt={ckpt_path}")
-                                args.append(f"+model_ckpt={ckpt_path}")
-                            else:
-                                log.warning(f"[sweeps:e2a] Could not locate pruned ckpt for {m}@{lvl}; using hub.")
-                            _run_module("lldc.scripts.stage2_compress_pm", [*args, *hydra_overrides])
+                            pm_cfg = cfg.experiment.stage2.pm
+                            for strategy in pm_cfg.strategies:
+                                for rate in pm_cfg.mask_rates:
+                                    args = [
+                                        f"model={m}",
+                                        f"+seed={seed}",
+                                        "+dump_recon=true",
+                                        f"stage2.pm.policy={strategy}",
+                                        f"stage2.pm.keep_fraction={1.0 - rate}",
+                                    ]
+                                    if ckpt_path is not None:
+                                        log.info(f"[sweeps:e2a] Stage2 PM {m} level={lvl} strategy={strategy} rate={rate} using ckpt={ckpt_path}")
+                                        args.append(f"+model_ckpt={ckpt_path}")
+                                    else:
+                                        log.warning(f"[sweeps:e2a] Could not locate pruned ckpt for {m}@{lvl}; using hub.")
+                                    _run_module("lldc.scripts.stage2_compress_pm", [*args, *hydra_overrides])
                         else:
-                            args = [
-                                f"model={m}",
-                                f"+seed={seed}",
-                                "+dump_recon=true",
-                            ]
-                            if ckpt_path is not None:
-                                log.info(f"[sweeps:e2a] Stage2 VQ {m} level={lvl} using ckpt={ckpt_path}")
-                                args.append(f"+model_ckpt={ckpt_path}")
-                            else:
-                                log.warning(f"[sweeps:e2a] Could not locate pruned ckpt for {m}@{lvl}; using hub.")
-                            _run_module("lldc.scripts.stage2_compress_vq", [*args, *hydra_overrides])
+                            vq_cfg = cfg.experiment.stage2.vq
+                            for k in vq_cfg.codebook_sizes:
+                                args = [
+                                    f"model={m}",
+                                    f"+seed={seed}",
+                                    "+dump_recon=true",
+                                    f"experiment.stage2.vq.codebook_sizes=[{k}]",
+                                ]
+                                if ckpt_path is not None:
+                                    log.info(f"[sweeps:e2a] Stage2 VQ {m} level={lvl} K={k} using ckpt={ckpt_path}")
+                                    args.append(f"+model_ckpt={ckpt_path}")
+                                else:
+                                    log.warning(f"[sweeps:e2a] Could not locate pruned ckpt for {m}@{lvl}; using hub.")
+                                _run_module("lldc.scripts.stage2_compress_vq", [*args, *hydra_overrides])
             _run_module("lldc.scripts.compute_baselines", [*hydra_overrides])
             _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
             run_post_runners(cfg)
@@ -224,7 +232,7 @@ def main() -> None:
             payloads_exist = bool(pm_paths or vq_paths)
             if not payloads_exist:
                 log.info(
-                    "[sweeps:e2b] No recon dumps found — generating via Stage2 now."
+                    "[sweeps:e2b] No recon dumps found â€” generating via Stage2 now."
                 )
                 for seed in seed_list:
                     for m in mg.get("mlm", []):
