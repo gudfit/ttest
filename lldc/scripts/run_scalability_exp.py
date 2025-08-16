@@ -4,7 +4,6 @@ from __future__ import annotations
 from typing import Any, List, Dict, Tuple
 import json, math
 from pathlib import Path
-
 import hydra
 import torch
 from datasets import load_dataset
@@ -33,7 +32,6 @@ from lldc.models.vq.vq_trainer import (
     cross_entropy_bits_index_stream,
 )
 
-
 def _position_codec(flags: List[bool]) -> Tuple[str, bytes, int]:
     n = len(flags)
     keep_frac = (sum(1 for f in flags if f) / max(1, n)) if n > 0 else 0.0
@@ -44,7 +42,6 @@ def _position_codec(flags: List[bool]) -> Tuple[str, bytes, int]:
         payload = bm.pack_bitmask(flags)
         return "bitmask", payload, bm.cost_bits(n)
 
-
 def _files_matching(root: Path, patterns: Tuple[str, ...]) -> set[Path]:
     out: set[Path] = set()
     for pat in patterns:
@@ -52,7 +49,6 @@ def _files_matching(root: Path, patterns: Tuple[str, ...]) -> set[Path]:
             if p.is_file():
                 out.add(p.resolve())
     return out
-
 
 def _sum_bytes(files: set[Path]) -> int:
     tot = 0
@@ -63,24 +59,20 @@ def _sum_bytes(files: set[Path]) -> int:
             pass
     return tot
 
-
 def _compute_static_bits(paths: Paths, cfg: Any) -> int:
     MODEL = ("*.pt", "*.bin", "*.safetensors")
     CODEBK = ("*codebook*.*", "*vq*codebook*.*", "*_codebook*.*")
     INDEXLM = ("*index_lm*.*", "*gru*.*")
-
     ckpt_root = paths.checkpoints
     model_files = _files_matching(ckpt_root, MODEL)
     codebook_files = _files_matching(ckpt_root, CODEBK)
     idxlm_files = _files_matching(ckpt_root, INDEXLM)
     model_only = model_files.difference(codebook_files).difference(idxlm_files)
-
     total_bits = (
         _sum_bytes(model_only) + _sum_bytes(codebook_files) + _sum_bytes(idxlm_files)
     ) * 8
     override = int(getattr(getattr(cfg, "experiment", {}), "static_bits_override", 0))
     return int(override if (total_bits == 0 and override > 0) else total_bits)
-
 
 @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
 def main(cfg: Any) -> None:
@@ -89,6 +81,7 @@ def main(cfg: Any) -> None:
     torch.use_deterministic_algorithms(True, warn_only=False)
     set_determinism(int(getattr(cfg, "seed", 17)))
     paths = Paths().ensure()
+
     dataset_name = getattr(cfg.e2b.scalability, "dataset", "wikitext-2")
     factors = list(getattr(cfg.e2b.scalability, "factors", [1, 2, 4, 8, 16, 32]))
     schedule_default = [100, 500, 1000, 5000, 10000, 20000]
@@ -102,24 +95,23 @@ def main(cfg: Any) -> None:
 
     train = ds[cfg.data.source.split_map.train]
     test = ds[cfg.data.source.split_map.test]
-    total_train = len(train)
 
+    total_train = len(train)
     sizes: List[int] = []
     for f in factors or []:
         n = max(10, int(total_train * (float(f) / float(max(factors)))))
         sizes.append(n)
     if not sizes:
         sizes = [s for s in schedule_default if s <= total_train]
-
     sizes = sorted(set(max(10, min(s, total_train)) for s in sizes))
     log.info(f"[scalability] Running sizes={sizes}")
+
     mlm_name = cfg.model.pretrained_name
-    mlm = AutoModelForMaskedLM.from_pretrained(mlm_name)
+    mlm = AutoModelForCausalLM.from_pretrained(mlm_name) if _is_ar(mlm_name) else None  
     tok_mlm = AutoTokenizer.from_pretrained(mlm_name)
     if tok_mlm.pad_token is None and tok_mlm.eos_token:
         tok_mlm.pad_token = tok_mlm.eos_token
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    mlm.to(device).eval()
 
     oracle_name = getattr(
         cfg.experiment.stage2.pm.arithmetic_coder, "oracle_model", "gpt2-large"
@@ -127,6 +119,7 @@ def main(cfg: Any) -> None:
     oracle_tok = AutoTokenizer.from_pretrained(oracle_name)
     oracle = AutoModelForCausalLM.from_pretrained(oracle_name).to(device).eval()
     cp_oracle = OracleEnsemble(model_names=[oracle_name], device=device)
+
     static_bits_total = _compute_static_bits(paths, cfg)
 
     for size in sizes:
@@ -138,12 +131,15 @@ def main(cfg: Any) -> None:
         pm_fids: List[float] = []
         pm_tcms: List[float] = []
         pm_pcms: List[float] = []
+
         pm_recons_path = Path("results/subsets") / str(int(size)) / "pm_recons.jsonl"
         pm_recons_path.parent.mkdir(parents=True, exist_ok=True)
 
         with pm_recons_path.open("w", encoding="utf-8") as fout:
             for ex in te:
-                text = ex[text_field]
+                text = (ex[text_field] or "").strip()
+                if not text:
+                    continue
                 ids = tok_mlm(
                     text,
                     return_tensors="pt",
@@ -151,10 +147,8 @@ def main(cfg: Any) -> None:
                     max_length=cfg.data.processing.max_length,
                     add_special_tokens=False,
                 )["input_ids"][0].to(device)
-
-                if ids.numel() == 0:
+                if ids.numel() == 0 or ids.shape[-1] == 0:
                     continue
-
                 s_bits = pll_surprisal_scores(ids, mlm, tok_mlm, tok_mlm.mask_token_id)
                 keep_flags = choose_mask("topk_global", s_bits, keep_fraction=0.4)
                 codec, pos_payload, pos_bits = _position_codec(keep_flags.tolist())
@@ -180,7 +174,6 @@ def main(cfg: Any) -> None:
                     past = out.past_key_values
                     logits = out.logits[:, -1, :]
                     p = torch.softmax(logits, dim=-1)
-
                     for tid in kept_oracle_ids_list:
                         probs.append(p.squeeze(0).detach().cpu().tolist())
                         step = oracle(
@@ -192,7 +185,6 @@ def main(cfg: Any) -> None:
                         logits = step.logits[:, -1, :]
                         p = torch.softmax(logits, dim=-1)
                         syms.append(int(tid))
-
                 if syms:
                     try:
                         payload = ac.encode_with_probs(syms, probs)
@@ -231,7 +223,7 @@ def main(cfg: Any) -> None:
                 )
 
         pm_bpc = (pm_token_bits + pm_position_bits) / max(1, pm_chars)
-        vq_model, vq_tok = train_vq_joint(
+        model_vq, vq_tok = train_vq_joint(
             base_model_name=cfg.model.pretrained_name,
             dataset_name=cfg.data.source.hf_dataset,
             dataset_config=cfg.data.source.hf_config,
@@ -243,21 +235,27 @@ def main(cfg: Any) -> None:
             epochs=3,
             beta=float(cfg.experiment.stage2.vq.bottleneck.commitment_beta),
         )
-        vq_model.eval().to(device)
-
+        model_vq.eval().to(device)
         K = int(cfg.experiment.stage2.vq.codebook_sizes[0])
+
         idx_train: List[List[int]] = []
         for ex in tr:
+            txt = (ex[text_field] or "").strip()
+            if not txt:
+                continue
             ids = vq_tok(
-                ex[text_field],
+                txt,
                 return_tensors="pt",
                 truncation=True,
                 max_length=cfg.data.processing.max_length,
                 add_special_tokens=False,
             )["input_ids"].to(device)
-            idx = encode_indices(vq_model, ids)[0].tolist()
+            if ids.numel() == 0 or ids.shape[-1] == 0:
+                continue
+            idx = encode_indices(model_vq, ids)[0].tolist()
             if idx:
                 idx_train.append(idx)
+
         idx_lm = (
             train_index_lm(
                 idx_train,
@@ -275,10 +273,13 @@ def main(cfg: Any) -> None:
         vq_fids: List[float] = []
         vq_tcms: List[float] = []
         vq_pcms: List[float] = []
+
         vq_recons_path = Path("results/subsets") / str(int(size)) / "vq_recons.jsonl"
         with vq_recons_path.open("w", encoding="utf-8") as fout:
             for ex in te:
-                text = ex[text_field]
+                text = (ex[text_field] or "").strip()
+                if not text:
+                    continue
                 ids = vq_tok(
                     text,
                     return_tensors="pt",
@@ -286,16 +287,21 @@ def main(cfg: Any) -> None:
                     max_length=cfg.data.processing.max_length,
                     add_special_tokens=False,
                 )["input_ids"].to(device)
-                idx = encode_indices(vq_model, ids)[0].tolist()
+                if ids.numel() == 0 or ids.shape[-1] == 0:
+                    continue
+
+                idx = encode_indices(model_vq, ids)[0].tolist()
+                if not idx:
+                    continue
+
                 vq_bits += cross_entropy_bits_index_stream(idx_lm, idx)
                 vq_chars += len(text)
                 with torch.no_grad():
                     idx_t = torch.tensor(
                         idx, dtype=torch.long, device=device
                     ).unsqueeze(0)
-                    toks_pred = vq_model.decode_from_indices(idx_t)[0].tolist()
+                    toks_pred = model_vq.decode_from_indices(idx_t)[0].tolist()
                 recon_text = vq_tok.decode(toks_pred, skip_special_tokens=True)
-
                 cf = character_level_fidelity(text, recon_text)
                 tcm_pcm = tcm_pcm_from_texts(text, recon_text, cp_oracle)
                 vq_fids.append(cf)
@@ -326,8 +332,10 @@ def main(cfg: Any) -> None:
         pm_pcm_mean = float(sum(pm_pcms) / max(1, len(pm_pcms))) if pm_pcms else 0.0
         vq_tcm_mean = float(sum(vq_tcms) / max(1, len(vq_tcms))) if vq_tcms else 0.0
         vq_pcm_mean = float(sum(vq_pcms) / max(1, len(vq_pcms))) if vq_pcms else 0.0
+
         pm_amort_bpc = (static_bits_total / max(1, pm_chars)) + pm_bpc
         vq_amort_bpc = (static_bits_total / max(1, vq_chars)) + vq_bpc
+
         out_dir = Path("results/subsets") / str(int(size))
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "pm_points.json").write_text(
@@ -366,6 +374,10 @@ def main(cfg: Any) -> None:
             f"VQ: bpc={vq_bpc:.4f}, amort_bpc={vq_amort_bpc:.4f}, charF={vq_charF_mean:.2f}, TCM={vq_tcm_mean:.2f}, PCM={vq_pcm_mean:.2f}"
         )
 
+def _is_ar(name: str) -> bool:
+    n = name.lower()
+    return any(k in n for k in ("gpt", "llama", "mistral", "opt", "phi", "qwen", "glm", "mpt"))
 
 if __name__ == "__main__":
     main()
+

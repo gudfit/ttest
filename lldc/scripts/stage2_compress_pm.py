@@ -77,8 +77,11 @@ def _parse_prune_level(p: Path) -> float:
 def _is_valid_hf_dir(d: Path) -> bool:
     if not d.exists() or not d.is_dir():
         return False
-    has_cfg = (d / "config.json").exists()
-    has_weights = (d / "model.safetensors").exists() or (d / "pytorch_model.bin").exists()
+    has_cfg = (d / "config.json").exists() or (d / "adapter_config.json").exists()
+    has_weights = any(
+        (d / fn).exists()
+        for fn in ("model.safetensors", "pytorch_model.bin", "adapter_model.bin")
+    )
     return has_cfg and has_weights
 
 
@@ -87,8 +90,6 @@ def _find_best_local_ckpt(model_name: str, paths: Paths, prefer_exp: str | None 
     cands: list[tuple[int, float, float, Path]] = []  
     for p in root.rglob(f"{model_name}_pruned_*"):
         if not p.is_dir():
-            continue
-        if not (p / "READY").exists():
             continue
         if not _is_valid_hf_dir(p):
             continue
@@ -108,20 +109,29 @@ def _find_best_local_ckpt(model_name: str, paths: Paths, prefer_exp: str | None 
 def _resolve_model_source(cfg: Any, model_name: str, paths: Paths, log) -> str:
     explicit = _cfg_get(cfg, "model_ckpt", None)
     if explicit:
-        p = Path(str(explicit))
-        if _is_valid_hf_dir(p):
-            log.info(f"[stage2_pm] Using explicit checkpoint: {p}")
-            return str(p)
-        else:
-            log.warning(
-                f"[stage2_pm] Ignoring invalid model_ckpt '{explicit}' (missing config/weights)."
-            )
+        raw = Path(str(explicit))
+        cand_list = [raw, (paths.root / raw)]
+        if raw.name and raw.parent.name != "checkpoints":
+            cand_list.append(paths.checkpoints / raw.name)
+        for cand in cand_list:
+            try:
+                if _is_valid_hf_dir(cand):
+                    log.info(f"[stage2_pm] Using explicit checkpoint: {cand}")
+                    return str(cand)
+            except Exception:
+                pass
+        log.warning(
+            f"[stage2_pm] Ignoring invalid model_ckpt '{explicit}' "
+            f"(missing config/weights). Tried: {cand_list[0].resolve()} and repo-root variants."
+        )
+
     exp_name = str(getattr(getattr(cfg, "experiment", None), "name", ""))
     if bool(_cfg_get(cfg, "e2a.stage2_reuse", True)):
         best = _find_best_local_ckpt(model_name, paths, prefer_exp=exp_name or None)
         if best is not None:
             log.info(f"[stage2_pm] Reusing local checkpoint: {best}")
             return str(best)
+
     log.info(f"[stage2_pm] Falling back to hub model: {model_name}")
     return model_name
 
@@ -286,19 +296,17 @@ def main(cfg: Any) -> None:
     max_docs_override = _cfg_get(cfg, "stage2.pm.max_docs", None)
     fast_dev_run = bool(_cfg_get(cfg, "fast_dev_run", False) or _cfg_get(cfg, "smoke_test", False))
     if fast_dev_run and max_docs_override is None:
-        max_docs_override = 100  
+        max_docs_override = 200
 
     if max_docs_override is not None:
         max_eval = int(max_docs_override)
     elif max_eval_cfg is None:
-        max_eval = 1000
+        max_eval = 500
     else:
         max_eval = int(max_eval_cfg)
     test_split = test_split.select(range(min(max_eval, len(test_split))))
-
     keep_fraction = float(_cfg_get(cfg, "stage2.pm.keep_fraction", 0.4))
     policy = str(_cfg_get(cfg, "stage2.pm.policy", "topk_global"))
-
     dec_cfg = _cfg_get(cfg, "stage2.pm.decoding", {}) or {}
     dec_method = str(getattr(dec_cfg, "method", "greedy")).lower()
     beam_width = int(getattr(dec_cfg, "beam_width", 4))
@@ -329,12 +337,8 @@ def main(cfg: Any) -> None:
     total_position_bits = int(pos_bits_existing)
     total_chars = int(chars_existing)
 
-    desc = (
-        f"PM compress ({mlm_name}, {policy}, keep={keep_fraction:.2f}, dec={dec_method})"
-        + (" [FAST]" if fast_dev_run else "")
-        + (" [RESUME]" if n_done_existing > 0 else "")
-    )
-    pbar = tqdm(total=len(test_split), desc=desc, unit="doc")
+    from tqdm.auto import tqdm as _tqdm  
+    pbar = _tqdm(total=len(test_split), desc=f"PM compress ({mlm_name}, {policy}, keep={keep_fraction:.2f}, dec={dec_method})" + (" [FAST]" if fast_dev_run else "") + (" [RESUME]" if n_done_existing > 0 else ""), unit="doc")
     if n_done_existing > 0:
         pbar.update(n_done_existing)
         bpc_now = (total_token_bits + total_position_bits) / max(1, total_chars)
@@ -344,6 +348,7 @@ def main(cfg: Any) -> None:
         with recons_path.open(file_mode, encoding="utf-8") as fout, torch.inference_mode():
             for i, ex in enumerate(test_split):
                 if i < n_done_existing:
+                    pbar.update(1)
                     continue
 
                 text = (ex.get(text_field) or "").strip()
@@ -361,6 +366,7 @@ def main(cfg: Any) -> None:
                 if ids.numel() == 0:
                     pbar.update(1)
                     continue
+
                 s_bits = pll_surprisal_scores(ids, mlm, tok_mlm, tok_mlm.mask_token_id)
                 keep_flags_t = choose_mask(policy, s_bits, keep_fraction=keep_fraction)
                 keep_flags = keep_flags_t.tolist()
@@ -433,6 +439,7 @@ def main(cfg: Any) -> None:
 
                 total_chars += len(text)
                 n_docs += 1
+
                 bpc_now = (total_token_bits + total_position_bits) / max(1, total_chars)
                 pbar.set_postfix(bpc=f"{bpc_now:.4f}", docs=n_docs)
                 pbar.update(1)

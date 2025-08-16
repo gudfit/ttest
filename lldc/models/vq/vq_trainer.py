@@ -1,148 +1,156 @@
 # lldc/models/vq/vq_trainer.py
 
 from __future__ import annotations
+from typing import Any, Dict, List, Tuple, Optional
 from dataclasses import dataclass
-from typing import Any, List, Tuple, Optional
+import math
+import inspect
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import logging
-import inspect
+from torch.utils.data import DataLoader
 from transformers import (
-    AutoModelForCausalLM,
     AutoTokenizer,
-    Trainer,
-    TrainingArguments,
-    DataCollatorForLanguageModeling,
+    AutoModelForCausalLM,
+    default_data_collator,
+    get_linear_schedule_with_warmup,
+    DataCollatorWithPadding,
 )
 from datasets import load_dataset
 from lldc.models.vq.vq_bottleneck import VQBottleneckWrapper
-import json
-from pathlib import Path
+from tqdm.auto import tqdm
 
-
-def _select_memory_appropriate_model(
-    model_name: str, task_gb_requirement: float = 15.0
-) -> str:
-    if not torch.cuda.is_available():
-        return model_name
-
-    FALLBACK_CHAINS = {
-        "gpt2": ["gpt2", "gpt2-medium", "gpt2-large"],
-    }
-    MODEL_MEMORY_REQ_GB = {
-        "gpt2-large": 14.5,
-        "gpt2-medium": 7.0,
-        "gpt2": 3.5,
-    }
-
-    family = None
-    for k in FALLBACK_CHAINS:
-        if k in model_name:
-            family = k
-            break
-    if not family:
-        return model_name
-
-    available_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-    chain = FALLBACK_CHAINS[family]
-    try:
-        start_index = chain.index(model_name)
-    except ValueError:
-        return model_name
-
-    for i in range(start_index, -1, -1):
-        cand = chain[i]
-        need = MODEL_MEMORY_REQ_GB.get(cand, float("inf"))
-        if need <= available_gb:
-            if cand != model_name:
-                logging.getLogger("lldc").warning(
-                    f"[VQ] '{model_name}' needs ~{MODEL_MEMORY_REQ_GB.get(model_name, 'N/A')}GB VRAM; "
-                    f"available={available_gb:.1f}GB. Falling back to '{cand}'."
-                )
-            return cand
-
-    smallest = chain[0]
-    logging.getLogger("lldc").error(
-        f"[VQ] Even smallest '{smallest}' needs ~{MODEL_MEMORY_REQ_GB.get(smallest, 'N/A')}GB; "
-        f"available={available_gb:.1f}GB. Aborting."
-    )
-    raise MemoryError("Insufficient GPU memory for any model in the family.")
-
-
-def save_vq_wrapper(model: VQBottleneckWrapper, out_dir: Path, meta: dict):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
-    torch.save(model.state_dict(), out_dir / "model.pt")
-
-
-def load_vq_wrapper(
-    base_model_name: str,
-    layer_after: int,
-    codebook_size: int,
-    beta: float,
-    ckpt_dir: Path,
-) -> VQBottleneckWrapper | None:
-    try:
-        if not (ckpt_dir / "model.pt").exists():
-            return None
-        base = AutoModelForCausalLM.from_pretrained(base_model_name)
-        model = VQBottleneckWrapper(
-            base, layer_after=layer_after, codebook_size=codebook_size, beta=beta
-        )
-        sd = torch.load(ckpt_dir / "model.pt", map_location="cpu")
-        model.load_state_dict(sd, strict=True)
-        model.to("cuda" if torch.cuda.is_available() else "cpu").eval()
-        return model
-    except Exception:
-        return None
-
-
-class IndexLM(nn.Module):
-    def __init__(self, vocab_size: int, hidden_size: int = 512, layers: int = 1):
+class _IndexGRULM(nn.Module):
+    def __init__(self, K: int, hidden: int = 512, layers: int = 1):
         super().__init__()
-        self.embed = nn.Embedding(vocab_size, hidden_size)
-        self.gru = nn.GRU(hidden_size, hidden_size, num_layers=layers, batch_first=True)
-        self.out = nn.Linear(hidden_size, vocab_size)
+        self.K = int(K)
+        self.emb = nn.Embedding(self.K, hidden)
+        self.rnn = nn.GRU(hidden, hidden, num_layers=layers, batch_first=True)
+        self.out = nn.Linear(hidden, self.K)
+    def forward(self, x: torch.LongTensor) -> torch.Tensor:
+        h = self.emb(x)
+        y, _ = self.rnn(h)
+        return self.out(y)
 
-    def forward(self, x: torch.LongTensor):
-        h = self.embed(x)
-        y, _ = self.gru(h)
-        logits = self.out(y)
-        return logits
+@torch.no_grad()
+def cross_entropy_bits_index_stream(model: _IndexGRULM, idx: List[int]) -> float:
+    if not idx or len(idx) <= 1:
+        return 0.0
+    device = next(model.parameters()).device
+    x = torch.tensor(idx[:-1], dtype=torch.long, device=device).unsqueeze(0)
+    y = torch.tensor(idx[1:], dtype=torch.long, device=device).unsqueeze(0)
+    logits = model(x)
+    logp = torch.log_softmax(logits, dim=-1)
+    nll = nn.functional.nll_loss(logp.view(-1, logp.size(-1)), y.view(-1), reduction="mean")
+    nll_bits = float(nll.item() / math.log(2.0))
+    return nll_bits * (len(idx) - 1)
 
+def train_index_lm(
+    sequences: List[List[int]],
+    K: int,
+    hidden: int = 512,
+    layers: int = 1,
+    epochs: int = 2,
+    batch_size: int = 64,
+    lr: float = 1e-3,
+) -> _IndexGRULM:
+    model = _IndexGRULM(K=K, hidden=hidden, layers=layers)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device).train()
+    def _examples():
+        for seq in sequences:
+            if not seq or len(seq) <= 1:
+                continue
+            yield torch.tensor(seq[:-1], dtype=torch.long), torch.tensor(seq[1:], dtype=torch.long)
+    def _collate(batch):
+        if not batch:
+            x = torch.zeros((1, 1), dtype=torch.long)
+            y = torch.zeros((1, 1), dtype=torch.long)
+            return x, y
+        max_len = max(b[0].numel() for b in batch)
+        xs, ys = [], []
+        for x, y in batch:
+            if x.numel() == 0 or y.numel() == 0:
+                continue
+            pad_x = torch.full((max_len,), 0, dtype=torch.long)
+            pad_y = torch.full((max_len,), 0, dtype=torch.long)
+            pad_x[: x.numel()] = x
+            pad_y[: y.numel()] = y
+            xs.append(pad_x)
+            ys.append(pad_y)
+        if not xs:
+            x = torch.zeros((1, 1), dtype=torch.long)
+            y = torch.zeros((1, 1), dtype=torch.long)
+            return x, y
+        xs = torch.stack(xs, dim=0)
+        ys = torch.stack(ys, dim=0)
+        return xs, ys
+    loader = DataLoader(list(_examples()), batch_size=batch_size, shuffle=True, collate_fn=_collate)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    for epoch in range(max(1, int(epochs))):
+        pbar = tqdm(loader, desc=f"Training Index LM Epoch {epoch+1}/{epochs}")
+        for x, y in pbar:
+            x = x.to(device)
+            y = y.to(device)
+            logits = model(x)
+            logp = nn.functional.log_softmax(logits, dim=-1)
+            loss = nn.functional.nll_loss(logp.view(-1, logp.size(-1)), y.view(-1))
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+            pbar.set_postfix(loss=loss.item())
+    model.eval()
+    return model
 
-def _make_training_args(output_dir: str, lr: float, epochs: int) -> TrainingArguments:
-    sig = inspect.signature(TrainingArguments.__init__)
-    params = {
-        "output_dir": output_dir,
-        "per_device_train_batch_size": 2,
-        "per_device_eval_batch_size": 2,
-        "learning_rate": lr,
-        "num_train_epochs": int(epochs),
-        "report_to": [],
-    }
-    if "bf16" in sig.parameters:
-        params["bf16"] = torch.cuda.is_available()
-    elif "fp16" in sig.parameters:
-        params["fp16"] = torch.cuda.is_available()
-    if "evaluation_strategy" in sig.parameters:
-        params["evaluation_strategy"] = "no"
-    elif "eval_strategy" in sig.parameters:
-        params["eval_strategy"] = "no"
-    if "save_strategy" in sig.parameters:
-        params["save_strategy"] = "no"
-    if "save_total_limit" in sig.parameters:
-        params["save_total_limit"] = 1
-    if "logging_steps" in sig.parameters:
-        params["logging_steps"] = 50
-    return TrainingArguments(**params)
+def _tok_from_pretrained(name: str):
+    tok = AutoTokenizer.from_pretrained(name)
+    if tok.pad_token is None and tok.eos_token:
+        tok.pad_token = tok.eos_token
+    return tok
 
+def _filter_nonempty_ids(ds):
+    return ds.filter(lambda ex: isinstance(ex.get("input_ids", None), list) and len(ex["input_ids"]) > 0)
+
+@dataclass
+class _TrainCfg:
+    base_model_name: str
+    dataset_name: str
+    dataset_config: Optional[str]
+    text_field: str
+    max_length: int
+    layer_after: int
+    codebook_size: int
+    lr: float
+    epochs: int
+    beta: float
+
+def _tokenize_map_fn(tok, text_field: str, max_length: int):
+    def _fn(batch):
+        texts = batch[text_field]
+        enc = tok(
+            texts,
+            truncation=True,
+            max_length=max_length,
+            add_special_tokens=False,
+        )
+        return {"input_ids": enc["input_ids"], "attention_mask": enc.get("attention_mask", None)}
+    return _fn
+
+def _collate_padded(tok):
+    collator = DataCollatorWithPadding(tokenizer=tok, padding=True, return_tensors="pt")
+    def _fn(features: List[Dict]) -> Dict[str, torch.Tensor]:
+        feats = [f for f in features if "input_ids" in f and len(f["input_ids"]) > 0]
+        if not feats:
+            feats = [{"input_ids": [tok.eos_token_id or 0]}]
+        return collator(feats)
+    return _fn
+
+def _build_vq_wrapper(base_model, layer_after: int, codebook_size: int, beta: float) -> VQBottleneckWrapper:
+    return VQBottleneckWrapper(lm=base_model, layer_after=layer_after, codebook_size=codebook_size, beta=beta)
 
 def train_vq_joint(
     base_model_name: str,
     dataset_name: str,
-    dataset_config: str,
+    dataset_config: Optional[str],
     text_field: str,
     max_length: int,
     layer_after: int,
@@ -150,140 +158,78 @@ def train_vq_joint(
     lr: float = 5e-5,
     epochs: int = 2,
     beta: float = 0.25,
-) -> Tuple[VQBottleneckWrapper, AutoTokenizer]:
-    torch.use_deterministic_algorithms(True, warn_only=False)
-    safe_name = _select_memory_appropriate_model(base_model_name)
-
-    tok = AutoTokenizer.from_pretrained(safe_name)
-    if tok.pad_token is None and tok.eos_token:
-        tok.pad_token = tok.eos_token
-    base = AutoModelForCausalLM.from_pretrained(safe_name)
-    model = VQBottleneckWrapper(
-        base, layer_after=layer_after, codebook_size=codebook_size, beta=beta
-    )
+    max_train_samples: Optional[int] = None,
+    **_: Any,
+) -> Tuple[VQBottleneckWrapper, Any]:
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
-    model.train()
+    base_tok = _tok_from_pretrained(base_model_name)
     ds = load_dataset(dataset_name, dataset_config)
-
-    def tok_fn(b):
-        return tok(b[text_field], truncation=True, max_length=max_length)
-
-    ds = ds.map(tok_fn, batched=True, remove_columns=[text_field])
-    collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=False)
-
-    args = _make_training_args(
-        output_dir=f"artifacts/checkpoints/vq_{safe_name}_K{codebook_size}",
-        lr=lr,
-        epochs=epochs,
+    train_split = ds["train"]
+    if max_train_samples is not None and len(train_split) > max_train_samples:
+        train_split = train_split.select(range(max_train_samples))
+    map_fn = _tokenize_map_fn(base_tok, text_field, max_length)
+    train_tok = train_split.map(map_fn, batched=True, remove_columns=[text_field])
+    train_tok = _filter_nonempty_ids(train_tok)
+    if len(train_tok) == 0:
+        raise RuntimeError("After tokenization, no training examples remained (all were empty). Please check your dataset/text_field.")
+    base_model = AutoModelForCausalLM.from_pretrained(base_model_name)
+    base_model.to(device)
+    base_model.train()
+    model = _build_vq_wrapper(
+        base_model=base_model,
+        layer_after=int(layer_after),
+        codebook_size=int(codebook_size),
+        beta=float(beta),
+    ).to(device)
+    loader = DataLoader(
+        train_tok,
+        batch_size=8,
+        shuffle=True,
+        collate_fn=_collate_padded(base_tok),
     )
-
-    def compute_loss(model, inputs, return_outputs=False):
-        labels = inputs["input_ids"]
-        outputs = model(input_ids=labels, labels=labels)
-        loss = outputs["loss"]
-        return (loss, outputs) if return_outputs else loss
-
-    trainer = Trainer(
-        model=model,
-        args=args,
-        data_collator=collator,
-        train_dataset=ds["train"].select(range(min(10000, len(ds["train"])))),
-        tokenizer=tok,
-        compute_loss_func=compute_loss,
+    optim = torch.optim.AdamW(model.parameters(), lr=float(lr))
+    total_steps = max(1, len(loader) * max(1, int(epochs)))
+    sched = get_linear_schedule_with_warmup(
+        optim, num_warmup_steps=int(0.06 * total_steps), num_training_steps=total_steps
     )
-    trainer.train()
+    model.train()
+    for epoch in range(max(1, int(epochs))):
+        pbar = tqdm(loader, desc=f"Training VQ Model Epoch {epoch+1}/{epochs}")
+        for batch in pbar:
+            input_ids = batch["input_ids"].to(device)
+            attn = batch.get("attention_mask", None)
+            labels = input_ids.clone()
+            if attn is not None:
+                labels[attn.to(labels.device) == 0] = -100
+            out = model(input_ids=input_ids, attention_mask=attn.to(device) if attn is not None else None, labels=labels)
+            loss = out['loss']
+            optim.zero_grad(set_to_none=True)
+            loss.backward()
+            optim.step()
+            sched.step()
+            pbar.set_postfix(loss=loss.item())
     model.eval()
-    return model, tok
-
+    return model, base_tok
 
 @torch.no_grad()
-def encode_indices(
-    model: VQBottleneckWrapper, input_ids: torch.LongTensor
-) -> torch.LongTensor:
-    out = model(input_ids=input_ids)
-    return out["indices"]
-
-
-def _seq_ce_bits(lm: "IndexLM", seq: List[int]) -> float:
-    if len(seq) < 2:
-        return 0.0
-    device = next(lm.parameters()).device
-    x = torch.tensor(seq[:-1], dtype=torch.long, device=device).unsqueeze(0)
-    y = torch.tensor(seq[1:], dtype=torch.long, device=device).unsqueeze(0)
-    logits = lm(x)
-    loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
-    return float((loss / torch.log(torch.tensor(2.0, device=device))).sum().item())
-
-
-def train_index_lm(
-    indices: List[List[int]],
-    K: int,
-    hidden: int = 512,
-    layers: int = 1,
-    epochs: int = 2,
-    val_fraction: float = 0.1,
-    early_stop: bool = True,
-    patience: int = 3,
-) -> IndexLM:
-    torch.use_deterministic_algorithms(True, warn_only=False)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    lm = IndexLM(vocab_size=K, hidden_size=hidden, layers=layers).to(device)
-    opt = torch.optim.Adam(lm.parameters(), lr=1e-3)
-
-    # Flatten into sequences
-    data = [torch.tensor(seq, dtype=torch.long, device=device) for seq in indices if len(seq) >= 2]
-    if not data:
-        return lm.eval()
-
-    split = max(1, int(len(data) * (1 - val_fraction)))
-    train, val = data[:split], data[split:]
-
-    best_val = float("inf")
-    stale = 0
-
-    for ep in range(int(epochs)):
-        lm.train()
-        tot = 0.0
-        for seq in train:
-            x = seq[:-1].unsqueeze(0)
-            y = seq[1:].unsqueeze(0)
-            logits = lm(x)
-            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-            tot += float(loss.item())
-        lm.eval()
-        with torch.no_grad():
-            vloss = 0.0
-            for seq in val or []:
-                x = seq[:-1].unsqueeze(0)
-                y = seq[1:].unsqueeze(0)
-                logits = lm(x)
-                loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
-                vloss += float(loss.item())
-        if val:
-            if vloss < best_val - 1e-6:
-                best_val = vloss
-                stale = 0
-            else:
-                stale += 1
-                if early_stop and stale >= patience:
-                    break
-
-    return lm.eval()
-
-
-def cross_entropy_bits_index_stream(lm: "IndexLM", seq: List[int]) -> float:
-    if len(seq) < 2:
-        return 0.0
-    device = next(lm.parameters()).device
-    x = torch.tensor(seq[:-1], dtype=torch.long, device=device).unsqueeze(0)
-    y = torch.tensor(seq[1:], dtype=torch.long, device=device).unsqueeze(0)
-    with torch.no_grad():
-        logits = lm(x)
-        loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1), reduction="sum")
-        bits = float(loss.item()) / float(torch.log(torch.tensor(2.0, device=device)))
-    return bits
-
+def encode_indices(model: VQBottleneckWrapper, input_ids: torch.LongTensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    if input_ids is None or input_ids.numel() == 0 or input_ids.shape[-1] == 0:
+        dev = next(model.parameters()).device
+        return torch.empty((0,), dtype=torch.long, device=dev), None
+    if hasattr(model, "encode_to_indices"):
+        idx = model.encode_to_indices(input_ids)
+    elif hasattr(model, "encode_indices"):
+        idx = model.encode_indices(input_ids)
+    else:
+        out = model(input_ids=input_ids)
+        if 'indices' in out:
+            idx = out['indices']
+        else:
+            dev = next(model.parameters()).device
+            return torch.empty((0,), dtype=torch.long, device=dev), None
+    if isinstance(idx, (list, tuple)):
+        idx = torch.tensor(idx, dtype=torch.long, device=next(model.parameters()).device)
+    idx = idx.squeeze()
+    if idx.dim() == 0:
+        idx = idx.unsqueeze(0)
+    return idx, None

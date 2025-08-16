@@ -1,14 +1,10 @@
 # @package _global_
-
 name: e2a_pruning
-
 experiment:
   name: e2a_pruning
-
   model_groups:
-    mlm: [roberta-base, bert-base-cased, distilroberta]
+    mlm: [roberta-base, bert-base-cased, distilroberta-base]
     ar: [gpt2, gpt2-medium, gpt2-large]
-
   pruning:
     targets:
       mlm: ${experiment.model_groups.mlm}
@@ -22,9 +18,7 @@ experiment:
       drop_ffn_channels: true
       drop_layers: false
     saliency_metric: magnitude
-
   stage2_reuse: true
-
 defaults:
   - override /data: wikitext-103
   - override /model: roberta-base
@@ -32,23 +26,18 @@ defaults:
       - efficiency
       - fidelity
       - crumpled_paper
-
 evaluation:
   run_efficiency: true
   run_fidelity: true
   run_crumpled_paper: true
-
 recovery:
   finetune_epochs: auto
   lr: auto
   scheduler: auto
   warmup_ratio: auto
-
 replication:
   seeds: auto
   aggregate: mean_std
-
 outputs:
   write_rd_curves: true
   write_tables: true
-

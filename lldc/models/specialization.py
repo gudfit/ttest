@@ -5,10 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Literal
 import torch
 import torch.nn as nn
-
 Saliency = Literal["magnitude"]
-
-
 def _collect_ffn_channels(module: nn.Module) -> torch.Tensor:
     inter = getattr(module, "intermediate", None)
     out = getattr(module, "output", None)
@@ -21,8 +18,6 @@ def _collect_ffn_channels(module: nn.Module) -> torch.Tensor:
     w = dense_i.weight.detach()
     sal = w.abs().mean(dim=1)
     return sal
-
-
 def _collect_gpt2_mlp_channels(mlp: nn.Module) -> torch.Tensor:
     c_fc = getattr(mlp, "c_fc", None)
     c_proj = getattr(mlp, "c_proj", None)
@@ -33,8 +28,6 @@ def _collect_gpt2_mlp_channels(mlp: nn.Module) -> torch.Tensor:
     sal_in = W_in.abs().mean(dim=0)
     sal_out = W_out.abs().mean(dim=1)
     return sal_in + sal_out
-
-
 def prune_ffn_block(module: nn.Module, keep_mask: torch.Tensor):
     inter = module.intermediate.dense
     out = module.output.dense
@@ -44,8 +37,6 @@ def prune_ffn_block(module: nn.Module, keep_mask: torch.Tensor):
         out.weight = nn.Parameter(out.weight[:, keep_mask].clone())
     if hasattr(module, "config"):
         module.config.intermediate_size = int(keep_mask.sum().item())
-
-
 def prune_gpt2_mlp_block(mlp: nn.Module, keep_mask: torch.Tensor):
     c_fc = getattr(mlp, "c_fc", None)
     c_proj = getattr(mlp, "c_proj", None)
@@ -56,11 +47,14 @@ def prune_gpt2_mlp_block(mlp: nn.Module, keep_mask: torch.Tensor):
         if getattr(c_fc, "bias", None) is not None:
             c_fc.bias = nn.Parameter(c_fc.bias[keep_mask].clone())
         c_proj.weight = nn.Parameter(c_proj.weight[keep_mask, :].clone())
+    
+    new_nf = int(keep_mask.sum().item())
+    if hasattr(c_fc, 'nf'):
+        c_fc.nf = new_nf
+
     cfg = getattr(mlp, "config", getattr(getattr(mlp, "parent", None), "config", None))
     if cfg is not None and hasattr(cfg, "n_inner") and isinstance(cfg.n_inner, int):
-        cfg.n_inner = int(keep_mask.sum().item())
-
-
+        cfg.n_inner = new_nf
 def _num_heads_and_size(attn_module: nn.Module) -> Tuple[int, int]:
     cfg = getattr(
         attn_module,
@@ -74,17 +68,16 @@ def _num_heads_and_size(attn_module: nn.Module) -> Tuple[int, int]:
         n_heads = attn_module.num_heads
         head_dim = attn_module.head_dim
     return int(n_heads), int(head_dim)
-
-
 def head_saliency(attn_module: nn.Module) -> torch.Tensor:
+    if hasattr(attn_module, "num_heads"):
+        H = attn_module.num_heads
+    else:
+        H = attn_module.num_attention_heads
     if hasattr(attn_module, "c_attn"):
         W = attn_module.c_attn.weight.data
-        d = W.size(1) // 3 if W.size(1) % 3 == 0 else W.size(0) // 3
         if W.size(1) % 3 == 0:
+            d = W.size(1) // 3
             q, k, v = W[:, :d], W[:, d : 2 * d], W[:, 2 * d :]
-            H = getattr(
-                attn_module, "num_heads", getattr(attn_module, "num_attention_heads")
-            )
             D = d // H
             sal = [
                 (
@@ -98,9 +91,6 @@ def head_saliency(attn_module: nn.Module) -> torch.Tensor:
         else:
             d = W.size(0) // 3
             q, k, v = W[:d, :], W[d : 2 * d, :], W[2 * d :, :]
-            H = getattr(
-                attn_module, "num_heads", getattr(attn_module, "num_attention_heads")
-            )
             D = q.size(0) // H
             sal = [
                 (
@@ -115,7 +105,6 @@ def head_saliency(attn_module: nn.Module) -> torch.Tensor:
         q = attn_module.self.query.weight.data
         k = attn_module.self.key.weight.data
         v = attn_module.self.value.weight.data
-        H = attn_module.num_attention_heads
         D = q.size(0) // H
         sal = [
             (
@@ -126,21 +115,15 @@ def head_saliency(attn_module: nn.Module) -> torch.Tensor:
             for h in range(H)
         ]
         return torch.tensor(sal)
-
-
 def structured_prune(
     model: nn.Module, level: float, drop_heads: bool = True, drop_ffn: bool = True
 ) -> Dict[str, int]:
     dropped = {"heads": 0, "ffn_channels": 0}
-
     is_bert_like = hasattr(model, "encoder") and hasattr(model.encoder, "layer")
     is_gpt2_like = hasattr(model, "transformer") and hasattr(model.transformer, "h")
-
     if not (is_bert_like or is_gpt2_like):
         return dropped
-
     blocks = list(model.encoder.layer) if is_bert_like else list(model.transformer.h)
-
     if drop_heads:
         if is_bert_like and hasattr(model, "prune_heads"):
             heads_to_prune: Dict[int, List[int]] = {}
@@ -160,7 +143,6 @@ def structured_prune(
                     dropped["heads"] += len(to_drop)
             if heads_to_prune:
                 model.prune_heads(heads_to_prune)
-
         elif is_gpt2_like:
             for li, blk in enumerate(blocks):
                 attn = getattr(blk, "attn", None)
@@ -177,7 +159,6 @@ def structured_prune(
                     continue
                 attn.prune_heads(set(to_drop))
                 dropped["heads"] += len(to_drop)
-
     if drop_ffn:
         for blk in blocks:
             if is_bert_like and hasattr(blk, "intermediate"):
@@ -200,5 +181,4 @@ def structured_prune(
                             keep = sal > thr
                             prune_gpt2_mlp_block(mlp, keep)
                             dropped["ffn_channels"] += int((~keep).sum().item())
-
     return dropped

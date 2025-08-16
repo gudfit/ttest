@@ -7,6 +7,8 @@ import torch
 
 
 def set_determinism(seed: int, cudnn_benchmark: bool = False, allow_tf32: bool = True):
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
     os.environ.setdefault("PYTHONHASHSEED", str(seed))
     random.seed(seed)
     np.random.seed(seed)
@@ -20,3 +22,4 @@ def set_determinism(seed: int, cudnn_benchmark: bool = False, allow_tf32: bool =
         torch.backends.cudnn.allow_tf32 = allow_tf32
     except Exception:
         pass
+

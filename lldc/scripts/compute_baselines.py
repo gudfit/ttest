@@ -1,23 +1,17 @@
 # lldc/scripts/compute_baselines.py
 
 from __future__ import annotations
-
 import hydra
 from typing import Any, Dict, List
 import json, os, subprocess, tempfile, time
 from pathlib import Path
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
-
 from lldc.utils.paths import Paths
 from lldc.utils.logging import setup_logging
 from lldc.baselines.kenlm_subsample import kenlm_ngram_bpc
-
-
 def _write_corpus(txts: List[str], path: Path) -> None:
     path.write_text("\n".join(txts), encoding="utf-8")
-
-
 def _try_run(cmd: List[str]) -> tuple[bool, float, str]:
     try:
         t0 = time.perf_counter()
@@ -28,8 +22,6 @@ def _try_run(cmd: List[str]) -> tuple[bool, float, str]:
         return True, dt, out.stdout.decode("utf-8", errors="ignore")
     except Exception as e:
         return False, 0.0, str(e)
-
-
 def main():
     @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
     def _run(cfg: Any) -> None:
@@ -37,26 +29,29 @@ def main():
         paths = Paths().ensure()
         out_dir = paths.results
         out_dir.mkdir(parents=True, exist_ok=True)
-
         ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
         text_field = cfg.data.processing.text_field
         train_texts = [ex[text_field] for ex in ds[cfg.data.source.split_map.train]]
         test_texts = [ex[text_field] for ex in ds[cfg.data.source.split_map.test]]
+
+        fair_train_limit = getattr(getattr(cfg.data, "limits", {}), "max_train_samples", 10000) or 10000
+        if len(train_texts) > fair_train_limit:
+            log.info(f"[baselines] Subsampling train data for KenLM to {fair_train_limit} docs for fairness.")
+            train_texts = train_texts[:fair_train_limit]
+
         total_chars = sum(len(t) for t in test_texts)
-
         results: Dict[str, Dict] = {}
-
         try:
             bpc8 = kenlm_ngram_bpc(
                 train_texts,
                 test_texts,
                 workdir="artifacts/runs/kenlm_8gram_baseline",
                 order=8,
+                pruning="0 0 1",
             )
             results["kenlm_8gram"] = {"bpc": float(bpc8), "status": "ok"}
         except Exception as e:
             results["kenlm_8gram"] = {"status": f"error: {e}"}
-
         try:
             with tempfile.TemporaryDirectory() as td:
                 raw = Path(td) / "test.txt"
@@ -81,7 +76,6 @@ def main():
                 }
         except Exception as e:
             results["zstd_22"] = {"status": f"unavailable or error: {e}"}
-
         try:
             with tempfile.TemporaryDirectory() as td:
                 raw = Path(td) / "test.txt"
@@ -102,20 +96,13 @@ def main():
                 }
         except Exception as e:
             results["cmix"] = {"status": f"unavailable or error: {e}"}
-
         try:
-            import deepzip  # noqa: F401
-
-            # Placeholder — record availability only
+            import deepzip # noqa: F401
             results["deepzip"] = {"status": "ok_but_not_implemented_in_this_stub"}
         except Exception as e:
             results["deepzip"] = {"status": f"unavailable: {e}"}
-
         (out_dir / "baselines.json").write_text(json.dumps(results, indent=2))
         log.info(f"[baselines] Wrote results -> {out_dir / 'baselines.json'}")
-
     _run()
-
-
 if __name__ == "__main__":
     main()

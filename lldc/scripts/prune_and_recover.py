@@ -1,16 +1,14 @@
 # lldc/scripts/prune_and_recover.py
 
 from __future__ import annotations
-
 from typing import Any, Optional
 from pathlib import Path
 import math
 import inspect
-import os  
-
+import os
+import json
 import hydra
 import torch
-
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
@@ -20,12 +18,10 @@ from transformers import (
     Trainer,
     TrainingArguments,
 )
-
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
 from lldc.utils.determinism import set_determinism
 from lldc.models.specialization import structured_prune
-
 
 def _cfg_get(cfg: Any, dotted: str, default=None):
     cur = cfg
@@ -38,7 +34,6 @@ def _cfg_get(cfg: Any, dotted: str, default=None):
             cur = getattr(cur, key, None)
     return default if cur is None else cur
 
-
 def _cfg_get_first(cfg: Any, candidates: list[str], default=None):
     for path in candidates:
         val = _cfg_get(cfg, path, None)
@@ -46,15 +41,12 @@ def _cfg_get_first(cfg: Any, candidates: list[str], default=None):
             return val
     return default
 
-
 def _is_auto(x: Any) -> bool:
     return isinstance(x, str) and x.strip().lower() == "auto"
-
 
 def _cfg_arch(name: str) -> str:
     n = name.lower()
     return "ar" if "gpt2" in n else "mlm"
-
 
 def _is_valid_hf_dir(p: Path) -> bool:
     try:
@@ -67,7 +59,6 @@ def _is_valid_hf_dir(p: Path) -> bool:
     except Exception:
         return False
 
-
 def _make_training_args(
     output_dir: str,
     epochs: int,
@@ -76,7 +67,6 @@ def _make_training_args(
     warmup_ratio: float = 0.06,
 ) -> TrainingArguments:
     import inspect as _inspect
-
     sig = _inspect.signature(TrainingArguments.__init__)
     params = {
         "output_dir": output_dir,
@@ -88,17 +78,14 @@ def _make_training_args(
         "lr_scheduler_type": scheduler if "lr_scheduler_type" in sig.parameters else None,
     }
     params = {k: v for k, v in params.items() if v is not None}
-
     if "bf16" in sig.parameters:
         params["bf16"] = torch.cuda.is_available()
     elif "fp16" in sig.parameters:
         params["fp16"] = torch.cuda.is_available()
-
     if "evaluation_strategy" in sig.parameters:
         params["evaluation_strategy"] = "no"
     elif "eval_strategy" in sig.parameters:
         params["eval_strategy"] = "no"
-
     if "save_strategy" in sig.parameters:
         params["save_strategy"] = "no"
     if "save_total_limit" in sig.parameters:
@@ -106,7 +93,6 @@ def _make_training_args(
     if "logging_steps" in sig.parameters:
         params["logging_steps"] = 50
     return TrainingArguments(**params)
-
 
 def _resolve_recovery_hparams(
     cfg: Any,
@@ -155,9 +141,8 @@ def _resolve_recovery_hparams(
         ],
         None,
     )
-
     level = float(max(0.0, min(1.0, prune_level)))
-    severity = level / max(1e-6, (1.0 - level))  
+    severity = level / max(1e-6, (1.0 - level))
     base_updates = 600 if arch == "mlm" else 900
     target_updates = int(round(base_updates * (1.0 + 1.5 * severity)))
     target_updates = max(200, min(target_updates, 4000))
@@ -174,10 +159,9 @@ def _resolve_recovery_hparams(
         lr = float(lr_cfg)
     scheduler = "cosine" if (scheduler_cfg is None or _is_auto(scheduler_cfg)) else str(scheduler_cfg)
     if warmup_cfg is None or _is_auto(warmup_cfg):
-        warmup_ratio = float(min(0.20, 0.06 + 0.10 * level))  
+        warmup_ratio = float(min(0.20, 0.06 + 0.10 * level))
     else:
         warmup_ratio = float(warmup_cfg)
-
     return {
         "epochs": int(epochs),
         "lr": float(lr),
@@ -188,13 +172,12 @@ def _resolve_recovery_hparams(
         "severity": float(severity),
     }
 
-
 @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
 def main(cfg: Any) -> None:
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     log = setup_logging()
     paths = Paths().ensure()
-    torch.use_deterministic_algorithms(True, warn_only=False)
+    torch.use_deterministic_algorithms(True, warn_only=True)
     set_determinism(getattr(cfg, "seed", 13))
     model_name = cfg.model.pretrained_name
     arch = _cfg_arch(model_name)
@@ -203,7 +186,6 @@ def main(cfg: Any) -> None:
     seed_suffix = f"_seed{seed}" if seed is not None else ""
     exp_name = str(getattr(getattr(cfg, "experiment", None), "name", "default"))
     outdir = paths.checkpoints / exp_name / f"{model_name}_pruned_{level}{seed_suffix}"
-
     skip_if_ready = bool(
         _cfg_get_first(
             cfg,
@@ -229,7 +211,6 @@ def main(cfg: Any) -> None:
             False,
         )
     )
-
     if skip_if_ready and not force_retrain and _is_valid_hf_dir(outdir):
         log.info(f"[prune] Checkpoint already READY — skipping retrain: {outdir}")
         return
@@ -256,33 +237,34 @@ def main(cfg: Any) -> None:
             _cfg_get(cfg, "experiment.pruning.structured.drop_ffn_channels", True),
         )
     )
-
     dropped = structured_prune(
         model, level=level, drop_heads=drop_heads, drop_ffn=drop_ffn
     )
     log.info(f"[prune] {model_name} @ level={level} → dropped={dropped}")
     ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
     text_field = cfg.data.processing.text_field
-
     def tok_fn(b):
         return tok(
             b[text_field],
             truncation=True,
             max_length=cfg.data.processing.max_length,
         )
-
     ds = ds.map(tok_fn, batched=True, remove_columns=[text_field])
-    train_slice_size = min(4000, len(ds["train"]))
-    train_dataset = ds["train"].select(range(train_slice_size))
+    ds = ds.filter(lambda ex: len(ex["input_ids"]) > 0)
+    train_split = ds["train"]
+    if len(train_split) == 0:
+        log.error("[prune] No valid training examples left after tokenization and filtering. Cannot recover.")
+        raise RuntimeError("Empty training dataset for recovery.")
+    train_slice_size = min(4000, len(train_split))
+    train_dataset = train_split.select(range(train_slice_size))
     collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=(arch == "mlm"))
     resolved = _resolve_recovery_hparams(
         cfg=cfg,
         prune_level=level,
         arch=arch,
         n_train_examples=train_slice_size,
-        per_device_batch_size=2,  
+        per_device_batch_size=2,
     )
-
     log.info(
         "[recover/auto] severity=%.3f, target_updates=%d, steps/epoch=%d → epochs=%d, "
         "lr=%.2e, warmup_ratio=%.3f, scheduler=%s",
@@ -294,7 +276,8 @@ def main(cfg: Any) -> None:
         resolved["warmup_ratio"],
         resolved["scheduler"],
     )
-
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "recovery_hparams.json").write_text(json.dumps(resolved, indent=2))
     args = _make_training_args(
         output_dir=str(outdir),
         epochs=resolved["epochs"],
@@ -302,7 +285,6 @@ def main(cfg: Any) -> None:
         scheduler=resolved["scheduler"],
         warmup_ratio=resolved["warmup_ratio"],
     )
-
     trainer = Trainer(
         model=model,
         args=args,
@@ -310,14 +292,10 @@ def main(cfg: Any) -> None:
         train_dataset=train_dataset,
     )
     trainer.train()
-
-    outdir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(outdir)
     tok.save_pretrained(outdir)
     (outdir / "READY").write_text("ok\n")
     log.info(f"[prune] Saved pruned+recovered checkpoint → {outdir}")
 
-
 if __name__ == "__main__":
     main()
-
