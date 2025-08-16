@@ -1,193 +1,289 @@
-# lldc/scripts/stage2_compress_vq.py
+# lldc/models/vq/vq_trainer.py
 
 from __future__ import annotations
-from typing import Any, List, Dict
-import json
-import math  # <-- needed for math.inf
-from pathlib import Path
-import time
-import hydra
+from dataclasses import dataclass
+from typing import Any, List, Tuple, Optional
 import torch
-from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from lldc.utils.paths import Paths
-from lldc.utils.logging import setup_logging
-from lldc.models.vq.vq_trainer import (
-    train_vq_joint,
-    encode_indices,
-    train_index_lm,
-    cross_entropy_bits_index_stream,
+import torch.nn as nn
+import torch.nn.functional as F
+import logging
+import inspect
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    Trainer,
+    TrainingArguments,
+    DataCollatorForLanguageModeling,
 )
+from datasets import load_dataset
+from lldc.models.vq.vq_bottleneck import VQBottleneckWrapper
+import json
+from pathlib import Path
 
 
-def _cfg_get(cfg: Any, dotted: str, default=None):
-    cur = cfg
-    for key in dotted.split("."):
-        if cur is None:
-            return default
-        if isinstance(cur, dict):
-            cur = cur.get(key, None)
-        else:
-            cur = getattr(cur, key, None)
-    return default if cur is None else cur
+def _select_memory_appropriate_model(
+    model_name: str, task_gb_requirement: float = 15.0
+) -> str:
+    if not torch.cuda.is_available():
+        return model_name
 
+    FALLBACK_CHAINS = {
+        "gpt2": ["gpt2", "gpt2-medium", "gpt2-large"],
+    }
+    MODEL_MEMORY_REQ_GB = {
+        "gpt2-large": 14.5,
+        "gpt2-medium": 7.0,
+        "gpt2": 3.5,
+    }
 
-def _limit(n: int | None, default: int) -> int:
+    family = None
+    for k in FALLBACK_CHAINS:
+        if k in model_name:
+            family = k
+            break
+    if not family:
+        return model_name
+
+    available_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    chain = FALLBACK_CHAINS[family]
     try:
-        if n is None:
-            return default
-        return int(n)
+        start_index = chain.index(model_name)
+    except ValueError:
+        return model_name
+
+    for i in range(start_index, -1, -1):
+        cand = chain[i]
+        need = MODEL_MEMORY_REQ_GB.get(cand, float("inf"))
+        if need <= available_gb:
+            if cand != model_name:
+                logging.getLogger("lldc").warning(
+                    f"[VQ] '{model_name}' needs ~{MODEL_MEMORY_REQ_GB.get(model_name, 'N/A')}GB VRAM; "
+                    f"available={available_gb:.1f}GB. Falling back to '{cand}'."
+                )
+            return cand
+
+    smallest = chain[0]
+    logging.getLogger("lldc").error(
+        f"[VQ] Even smallest '{smallest}' needs ~{MODEL_MEMORY_REQ_GB.get(smallest, 'N/A')}GB; "
+        f"available={available_gb:.1f}GB. Aborting."
+    )
+    raise MemoryError("Insufficient GPU memory for any model in the family.")
+
+
+def save_vq_wrapper(model: VQBottleneckWrapper, out_dir: Path, meta: dict):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+    torch.save(model.state_dict(), out_dir / "model.pt")
+
+
+def load_vq_wrapper(
+    base_model_name: str,
+    layer_after: int,
+    codebook_size: int,
+    beta: float,
+    ckpt_dir: Path,
+) -> VQBottleneckWrapper | None:
+    try:
+        if not (ckpt_dir / "model.pt").exists():
+            return None
+        base = AutoModelForCausalLM.from_pretrained(base_model_name)
+        model = VQBottleneckWrapper(
+            base, layer_after=layer_after, codebook_size=codebook_size, beta=beta
+        )
+        sd = torch.load(ckpt_dir / "model.pt", map_location="cpu")
+        model.load_state_dict(sd, strict=True)
+        model.to("cuda" if torch.cuda.is_available() else "cpu").eval()
+        return model
     except Exception:
-        return default
+        return None
 
 
-def _resolve_base_model_name(cfg: Any, paths: Paths) -> str:
-    ckpt = _cfg_get(cfg, "model_ckpt", None)
-    if ckpt and Path(str(ckpt)).exists():
-        return str(ckpt)
-    return cfg.model.pretrained_name
+class IndexLM(nn.Module):
+    def __init__(self, vocab_size: int, hidden_size: int = 512, layers: int = 1):
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, hidden_size)
+        self.gru = nn.GRU(hidden_size, hidden_size, num_layers=layers, batch_first=True)
+        self.out = nn.Linear(hidden_size, vocab_size)
+
+    def forward(self, x: torch.LongTensor):
+        h = self.embed(x)
+        y, _ = self.gru(h)
+        logits = self.out(y)
+        return logits
 
 
-@hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
-def main(cfg: Any) -> None:
-    log = setup_logging()
-    paths = Paths().ensure()
+def _make_training_args(output_dir: str, lr: float, epochs: int) -> TrainingArguments:
+    sig = inspect.signature(TrainingArguments.__init__)
+    params = {
+        "output_dir": output_dir,
+        "per_device_train_batch_size": 2,
+        "per_device_eval_batch_size": 2,
+        "learning_rate": lr,
+        "num_train_epochs": int(epochs),
+        "report_to": [],
+    }
+    if "bf16" in sig.parameters:
+        params["bf16"] = torch.cuda.is_available()
+    elif "fp16" in sig.parameters:
+        params["fp16"] = torch.cuda.is_available()
+    if "evaluation_strategy" in sig.parameters:
+        params["evaluation_strategy"] = "no"
+    elif "eval_strategy" in sig.parameters:
+        params["eval_strategy"] = "no"
+    if "save_strategy" in sig.parameters:
+        params["save_strategy"] = "no"
+    if "save_total_limit" in sig.parameters:
+        params["save_total_limit"] = 1
+    if "logging_steps" in sig.parameters:
+        params["logging_steps"] = 50
+    return TrainingArguments(**params)
+
+
+def train_vq_joint(
+    base_model_name: str,
+    dataset_name: str,
+    dataset_config: str,
+    text_field: str,
+    max_length: int,
+    layer_after: int,
+    codebook_size: int,
+    lr: float = 5e-5,
+    epochs: int = 2,
+    beta: float = 0.25,
+) -> Tuple[VQBottleneckWrapper, AutoTokenizer]:
+    torch.use_deterministic_algorithms(True, warn_only=False)
+    safe_name = _select_memory_appropriate_model(base_model_name)
+
+    tok = AutoTokenizer.from_pretrained(safe_name)
+    if tok.pad_token is None and tok.eos_token:
+        tok.pad_token = tok.eos_token
+    base = AutoModelForCausalLM.from_pretrained(safe_name)
+    model = VQBottleneckWrapper(
+        base, layer_after=layer_after, codebook_size=codebook_size, beta=beta
+    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+    model.train()
+    ds = load_dataset(dataset_name, dataset_config)
+
+    def tok_fn(b):
+        return tok(b[text_field], truncation=True, max_length=max_length)
+
+    ds = ds.map(tok_fn, batched=True, remove_columns=[text_field])
+    collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=False)
+
+    args = _make_training_args(
+        output_dir=f"artifacts/checkpoints/vq_{safe_name}_K{codebook_size}",
+        lr=lr,
+        epochs=epochs,
+    )
+
+    def compute_loss(model, inputs, return_outputs=False):
+        labels = inputs["input_ids"]
+        outputs = model(input_ids=labels, labels=labels)
+        loss = outputs["loss"]
+        return (loss, outputs) if return_outputs else loss
+
+    trainer = Trainer(
+        model=model,
+        args=args,
+        data_collator=collator,
+        train_dataset=ds["train"].select(range(min(10000, len(ds["train"])))),
+        tokenizer=tok,
+        compute_loss_func=compute_loss,
+    )
+    trainer.train()
+    model.eval()
+    return model, tok
+
+
+@torch.no_grad()
+def encode_indices(
+    model: VQBottleneckWrapper, input_ids: torch.LongTensor
+) -> torch.LongTensor:
+    out = model(input_ids=input_ids)
+    return out["indices"]
+
+
+def _seq_ce_bits(lm: "IndexLM", seq: List[int]) -> float:
+    if len(seq) < 2:
+        return 0.0
+    device = next(lm.parameters()).device
+    x = torch.tensor(seq[:-1], dtype=torch.long, device=device).unsqueeze(0)
+    y = torch.tensor(seq[1:], dtype=torch.long, device=device).unsqueeze(0)
+    logits = lm(x)
+    loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+    return float((loss / torch.log(torch.tensor(2.0, device=device))).sum().item())
+
+
+def train_index_lm(
+    indices: List[List[int]],
+    K: int,
+    hidden: int = 512,
+    layers: int = 1,
+    epochs: int = 2,
+    val_fraction: float = 0.1,
+    early_stop: bool = True,
+    patience: int = 3,
+) -> IndexLM:
     torch.use_deterministic_algorithms(True, warn_only=False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    lm = IndexLM(vocab_size=K, hidden_size=hidden, layers=layers).to(device)
+    opt = torch.optim.Adam(lm.parameters(), lr=1e-3)
 
-    ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
-    split_map = cfg.data.source.split_map
-    text_field = cfg.data.processing.text_field
-    train_split = ds[split_map.train].select(range(10000))
-    test_split = ds[split_map.test].select(range(1000))
+    # Flatten into sequences
+    data = [torch.tensor(seq, dtype=torch.long, device=device) for seq in indices if len(seq) >= 2]
+    if not data:
+        return lm.eval()
 
-    layer_after = int(_cfg_get(cfg, "stage2.vq.bottleneck.layer_after", 6))
-    beta = float(_cfg_get(cfg, "stage2.vq.bottleneck.commitment_beta", 0.25))
-    K = int(_cfg_get(cfg, "stage2.vq.codebook_sizes.0", 256))
-    idx_hidden = int(_cfg_get(cfg, "stage2.vq.index_lm.hidden_size", 512))
-    idx_layers = int(_cfg_get(cfg, "stage2.vq.index_lm.layers", 1))
-    idx_epochs = int(_cfg_get(cfg, "stage2.vq.index_lm.epochs", 2))
+    split = max(1, int(len(data) * (1 - val_fraction)))
+    train, val = data[:split], data[split:]
 
-    base_model_name = _resolve_base_model_name(cfg, paths)
-    if Path(base_model_name).exists():
-        log.info(f"[stage2_vq] Using base model from checkpoint: {base_model_name}")
-    else:
-        log.info(f"[stage2_vq] Using base model from hub: {base_model_name}")
+    best_val = float("inf")
+    stale = 0
 
-    model_vq, tok = train_vq_joint(
-        base_model_name=base_model_name,
-        dataset_name=cfg.data.source.hf_dataset,
-        dataset_config=cfg.data.source.hf_config,
-        text_field=text_field,
-        max_length=cfg.data.processing.max_length,
-        layer_after=layer_after,
-        codebook_size=K,
-        lr=5e-5,
-        epochs=idx_epochs,
-        beta=beta,
-    )
-    model_vq.eval().to(device)
+    for ep in range(int(epochs)):
+        lm.train()
+        tot = 0.0
+        for seq in train:
+            x = seq[:-1].unsqueeze(0)
+            y = seq[1:].unsqueeze(0)
+            logits = lm(x)
+            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            tot += float(loss.item())
+        lm.eval()
+        with torch.no_grad():
+            vloss = 0.0
+            for seq in val or []:
+                x = seq[:-1].unsqueeze(0)
+                y = seq[1:].unsqueeze(0)
+                logits = lm(x)
+                loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1))
+                vloss += float(loss.item())
+        if val:
+            if vloss < best_val - 1e-6:
+                best_val = vloss
+                stale = 0
+            else:
+                stale += 1
+                if early_stop and stale >= patience:
+                    break
 
-    max_train = _limit(
-        getattr(getattr(cfg, "data", {}), "limits", {}).get("max_train_samples"), 10000
-    )
-    idx_train: List[List[int]] = []
-    for ex in train_split.select(range(min(max_train, len(train_split)))):
-        txt = ex.get(text_field) or ""
-        if not txt:
-            continue
-        ids = tok(
-            txt,
-            return_tensors="pt",
-            truncation=True,
-            max_length=cfg.data.processing.max_length,
-            add_special_tokens=False,
-        )["input_ids"].to(device)
-        seq_idx = encode_indices(model_vq, ids)[0].tolist()
-        if seq_idx:
-            idx_train.append(seq_idx)
-
-    lm = (
-        train_index_lm(
-            idx_train,
-            K=K,
-            hidden=idx_hidden,
-            layers=idx_layers,
-            epochs=idx_epochs,
-        )
-        .to(device)
-        .eval()
-    )
-
-    max_eval = _limit(
-        getattr(getattr(cfg, "data", {}), "limits", {}).get("max_eval_samples"), 2000
-    )
-
-    payload_dir = (
-        paths.payloads / f"vq_{cfg.model.pretrained_name.replace('/', '-')}_K{K}"
-    )
-    payload_dir.mkdir(parents=True, exist_ok=True)
-    recons_path = payload_dir / "recons.jsonl"
-
-    total_bits = 0.0
-    total_tokens = 0
-    total_chars = 0
-    n_docs = 0
-
-    with recons_path.open("w", encoding="utf-8") as fout:
-        for ex in test_split.select(range(min(max_eval, len(test_split)))):
-            txt = ex.get(text_field) or ""
-            if not txt:
-                continue
-            ids = tok(
-                txt,
-                return_tensors="pt",
-                truncation=True,
-                max_length=cfg.data.processing.max_length,
-                add_special_tokens=False,
-            )["input_ids"].to(device)
-            seq_idx = encode_indices(model_vq, ids)[0].tolist()
-            bits = cross_entropy_bits_index_stream(lm, seq_idx)
-            total_bits += bits
-            total_tokens += max(0, len(seq_idx) - 1)
-            total_chars += len(txt)
-            n_docs += 1
-            with torch.no_grad():
-                idx_t = torch.tensor(
-                    seq_idx, dtype=torch.long, device=device
-                ).unsqueeze(0)
-                toks_pred = model_vq.decode_from_indices(idx_t)[0].tolist()
-            recon = tok.decode(toks_pred, skip_special_tokens=True)
-            doc_rec = {
-                "original": txt,
-                "reconstruction": recon,
-                "orig_chars": len(txt),
-                "token_bits": int(round(bits)),
-                "position_bits": 0,
-                "index_len": int(len(seq_idx)),
-                "kept_tokens": 0,
-            }
-            fout.write(json.dumps(doc_rec) + "\n")
-
-    bpt = (total_bits / max(1, total_tokens)) if total_tokens > 0 else None
-    bpc = total_bits / max(1, total_chars) if total_chars > 0 else math.inf
-
-    summary = {
-        "method": "VQ",
-        "model": cfg.model.pretrained_name,
-        "codebook_K": K,
-        "index_bits": float(total_bits),
-        "tokens": int(total_tokens),
-        "chars": int(total_chars),
-        "bpt": (float(bpt) if bpt is not None else None),
-        "bpc": float(bpc),
-        "n_docs": int(n_docs),
-        "notes": "Index LM trained on TRAIN split indices only; evaluated on TEST indices.",
-    }
-    (payload_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    log.info(f"[stage2_vq] Wrote {recons_path} and summary: bpc={bpc:.6f}, bpt={bpt}")
+    return lm.eval()
 
 
-if __name__ == "__main__":
-    main()
+def cross_entropy_bits_index_stream(lm: "IndexLM", seq: List[int]) -> float:
+    if len(seq) < 2:
+        return 0.0
+    device = next(lm.parameters()).device
+    x = torch.tensor(seq[:-1], dtype=torch.long, device=device).unsqueeze(0)
+    y = torch.tensor(seq[1:], dtype=torch.long, device=device).unsqueeze(0)
+    with torch.no_grad():
+        logits = lm(x)
+        loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), y.reshape(-1), reduction="sum")
+        bits = float(loss.item()) / float(torch.log(torch.tensor(2.0, device=device)))
+    return bits
 

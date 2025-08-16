@@ -5,6 +5,7 @@ from typing import Any
 from pathlib import Path
 import hydra
 import torch
+import inspect
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
@@ -38,10 +39,37 @@ def _cfg_arch(name: str) -> str:
     return "ar" if "gpt2" in n else "mlm"
 
 
+def _make_training_args(output_dir: str, epochs: int) -> TrainingArguments:
+    sig = inspect.signature(TrainingArguments.__init__)
+    params = {
+        "output_dir": output_dir,
+        "per_device_train_batch_size": 2,
+        "learning_rate": 5e-5,
+        "num_train_epochs": int(epochs),
+        "report_to": [],
+    }
+    if "bf16" in sig.parameters:
+        params["bf16"] = torch.cuda.is_available()
+    elif "fp16" in sig.parameters:
+        params["fp16"] = torch.cuda.is_available()
+    if "evaluation_strategy" in sig.parameters:
+        params["evaluation_strategy"] = "no"
+    elif "eval_strategy" in sig.parameters:
+        params["eval_strategy"] = "no"
+    if "save_strategy" in sig.parameters:
+        params["save_strategy"] = "no"
+    if "save_total_limit" in sig.parameters:
+        params["save_total_limit"] = 1
+    if "logging_steps" in sig.parameters:
+        params["logging_steps"] = 50
+    return TrainingArguments(**params)
+
+
 @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
 def main(cfg: Any) -> None:
     log = setup_logging()
     paths = Paths().ensure()
+
     torch.use_deterministic_algorithms(True, warn_only=False)
     set_determinism(cfg.seed)
 
@@ -67,6 +95,7 @@ def main(cfg: Any) -> None:
             _cfg_get(cfg, "experiment.pruning.structured.drop_attention_heads", True),
         )
     )
+
     drop_ffn = bool(
         _cfg_get(
             cfg,
@@ -99,15 +128,9 @@ def main(cfg: Any) -> None:
         _cfg_get(cfg, "experiment.e2a.recovery.finetune_epochs", 3),
     )
 
-    args = TrainingArguments(
+    args = _make_training_args(
         output_dir=str(paths.checkpoints / f"{model_name}_pruned_{cfg.prune_level}"),
-        per_device_train_batch_size=2,
-        num_train_epochs=int(recovery_epochs),
-        learning_rate=5e-5,
-        bf16=torch.cuda.is_available(),
-        evaluation_strategy="no",  # <-- fixed
-        save_strategy="no",
-        report_to=[],
+        epochs=int(recovery_epochs),
     )
 
     trainer = Trainer(

@@ -1,6 +1,7 @@
 # lldc/scripts/sweeps.py
 
 from __future__ import annotations
+
 import hydra
 from typing import Any, List
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Sequence
 import sys
 
 from hydra.core.global_hydra import GlobalHydra
+
 from lldc.utils.logging import setup_logging
 from lldc.utils.paths import Paths
 from lldc.data.bootstrap import ensure_data
@@ -41,12 +43,14 @@ def _run_cmd(cmd: List[str]) -> None:
 def run_post_runners(cfg: Any) -> None:
     hydra_overrides = _extract_hydra_overrides_from_argv(sys.argv)
     argv_tokens = set(sys.argv[1:])
+
     with_dataset_stats = bool(getattr(cfg.experiment, "with_dataset_stats", False)) or (
         "--with-dataset-stats" in argv_tokens
     )
     with_latency_flops = bool(getattr(cfg.experiment, "with_latency_flops", False)) or (
         "--with-latency-flops" in argv_tokens
     )
+
     if with_dataset_stats:
         _run_cmd(
             [
@@ -56,6 +60,7 @@ def run_post_runners(cfg: Any) -> None:
                 *hydra_overrides,
             ]
         )
+
     if with_latency_flops:
         _run_cmd(
             [
@@ -102,9 +107,7 @@ def _best_ready_ckpt(paths: Paths, model_name: str) -> Path | None:
         if not (p / "READY").exists():
             continue
         cfg_ok = (p / "config.json").exists()
-        weights_ok = (p / "model.safetensors").exists() or (
-            p / "pytorch_model.bin"
-        ).exists()
+        weights_ok = (p / "model.safetensors").exists() or (p / "pytorch_model.bin").exists()
         if not (cfg_ok and weights_ok):
             continue
         level = -1.0
@@ -132,13 +135,14 @@ def main() -> None:
         paths = Paths().ensure()
         ensure_data(paths.root)
         hydra_overrides = _extract_hydra_overrides_from_argv(sys.argv)
+
         exp = cfg.experiment.name
         mg = getattr(cfg.experiment, "model_groups", {})
         num_seeds = 2
         seed_list = list(DEFAULT_SEEDS)[:num_seeds]
 
         if exp == "e1a_wiki103":
-            # Stage 1: specialise all MLMs
+            # Stage 1
             for seed in seed_list:
                 for m in mg.get("mlm", []):
                     log.info(f"[sweeps:e1a] Stage1 specialise {m} (seed={seed})")
@@ -147,25 +151,21 @@ def main() -> None:
                         [f"model={m}", f"+seed={seed}", *hydra_overrides],
                     )
 
-            # Stage 2: PM on MLMs (reuse local checkpoint when available)
+            # Stage 2 (PM)
             for seed in seed_list:
                 for m in mg.get("mlm", []):
                     ckpt = _best_ready_ckpt(paths, m)
                     if ckpt is not None:
-                        log.info(
-                            f"[sweeps:e1a] Stage2 PM {m} (seed={seed}) using ckpt={ckpt}"
-                        )
+                        log.info(f"[sweeps:e1a] Stage2 PM {m} (seed={seed}) using ckpt={ckpt}")
                         args = [
                             f"model={m}",
                             f"+seed={seed}",
-                            f"+model_ckpt={ckpt}",  # <-- append new key (Hydra)
+                            f"+model_ckpt={ckpt}",  # append for Hydra
                             "+dump_recon=true",
                             *hydra_overrides,
                         ]
                     else:
-                        log.warning(
-                            f"[sweeps:e1a] No local checkpoint found for {m}; using hub weights."
-                        )
+                        log.warning(f"[sweeps:e1a] No local checkpoint found for {m}; using hub weights.")
                         args = [
                             f"model={m}",
                             f"+seed={seed}",
@@ -174,7 +174,7 @@ def main() -> None:
                         ]
                     _run_module("lldc.scripts.stage2_compress_pm", args)
 
-            # Stage 2: VQ on AR models
+            # Stage 2 (VQ)
             for seed in seed_list:
                 for m in mg.get("ar", []):
                     log.info(f"[sweeps:e1a] Stage2 VQ {m} (seed={seed})")
@@ -201,24 +201,23 @@ def main() -> None:
                         log.info(
                             f"[sweeps:e2a] Prune & recover {m} at level={lvl} (seed={seed})"
                         )
-                        # Removed invalid 'recover_epochs=auto' override
+                        # NOTE: use '+prune_level=' to append unknown key in Hydra
                         _run_module(
                             "lldc.scripts.prune_and_recover",
                             [
                                 f"model={m}",
-                                f"prune_level={lvl}",
+                                f"+prune_level={lvl}",  # <-- FIXED: append, not override
                                 f"+seed={seed}",
                                 *hydra_overrides,
                             ],
                         )
-
                         ckpt = f"artifacts/checkpoints/{m}_pruned_{lvl}"
                         if arch == "mlm":
                             _run_module(
                                 "lldc.scripts.stage2_compress_pm",
                                 [
                                     f"model={m}",
-                                    f"+model_ckpt={ckpt}",  # <-- append new key (Hydra)
+                                    f"+model_ckpt={ckpt}",  # append is correct
                                     "+dump_recon=true",
                                     f"+seed={seed}",
                                     *hydra_overrides,
@@ -229,7 +228,7 @@ def main() -> None:
                                 "lldc.scripts.stage2_compress_vq",
                                 [
                                     f"model={m}",
-                                    f"+model_ckpt={ckpt}",  # <-- append new key (Hydra)
+                                    f"+model_ckpt={ckpt}",  # append is correct
                                     "+dump_recon=true",
                                     f"+seed={seed}",
                                     *hydra_overrides,
@@ -245,6 +244,7 @@ def main() -> None:
             pm_paths = list(payload_root.glob("pm_*/recons.jsonl"))
             vq_paths = list(payload_root.glob("vq_*/recons.jsonl"))
             payloads_exist = bool(pm_paths or vq_paths)
+
             if not payloads_exist:
                 log.info(
                     "[sweeps:e2b] No recon dumps found — generating via Stage2 now."
@@ -276,10 +276,12 @@ def main() -> None:
             docs = _load_recons(pm_paths) + _load_recons(vq_paths)
             orig = [d.get("original", "") for d in docs]
             recon = [d.get("reconstruction", "") for d in docs]
+
             ds = load_dataset(cfg.data.source.hf_dataset, cfg.data.source.hf_config)
             text_field = cfg.data.processing.text_field
             train_split = ds[cfg.data.source.split_map.train].select(range(2000))
             train_texts = [ex[text_field] for ex in train_split]
+
             stats = run_channel_analysis(
                 cfg,
                 recon_texts=recon,
@@ -290,8 +292,10 @@ def main() -> None:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(json.dumps(stats, indent=2), encoding="utf-8")
             log.info(f"[sweeps:e2b] Channel stats -> {out_path}")
+
             _run_module("lldc.scripts.evaluate_all", [*hydra_overrides])
             run_post_runners(cfg)
+
         else:
             log.error(f"Unknown experiment={exp}")
             sys.exit(2)

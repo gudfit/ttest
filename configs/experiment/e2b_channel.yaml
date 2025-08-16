@@ -1,4 +1,13 @@
+# @package _global_
+
 name: e2b_channel
+
+experiment:
+  name: e2b_channel
+
+  model_groups:
+    mlm: [roberta-base, bert-base-cased, distilroberta]
+    ar: [gpt2, gpt2-medium, gpt2-large]
 
 defaults:
   - override /data: wikitext-2
@@ -8,16 +17,12 @@ defaults:
       - fidelity
       - crumpled_paper
 
-model_groups:
-  mlm: [roberta-base, bert-base-cased, distilroberta-base]
-  ar: [gpt2, gpt2-medium, gpt2-large]
-
 analysis_inputs:
   from_experiment: e1a_wiki103
   methods: [pm, vq]
   models:
-    mlm: ${model_groups.mlm}
-    ar: ${model_groups.ar}
+    mlm: ${experiment.model_groups.mlm}
+    ar: ${experiment.model_groups.ar}
 
 deduplication:
   ngram:
@@ -49,3 +54,4 @@ replication:
 outputs:
   write_rd_curves: true
   write_tables: true
+
