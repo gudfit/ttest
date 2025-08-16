@@ -101,7 +101,7 @@ def _load_recons(jsonl_paths: List[Path]) -> list[dict]:
 def _best_ready_ckpt(paths: Paths, model_name: str) -> Path | None:
     root = paths.checkpoints
     cands: list[tuple[float, float, Path]] = []
-    for p in root.glob(f"{model_name}_pruned_*"):
+    for p in root.rglob(f"{model_name}_pruned_*"):
         if not p.is_dir():
             continue
         if not (p / "READY").exists():
@@ -111,10 +111,9 @@ def _best_ready_ckpt(paths: Paths, model_name: str) -> Path | None:
         if not (cfg_ok and weights_ok):
             continue
         level = -1.0
-        name = p.name
         try:
-            lvl_str = name.split("_pruned_")[-1]
-            level = float(lvl_str)
+            tail = p.name.split("_pruned_")[-1]
+            level = float(tail.split("_seed")[0])
         except Exception:
             level = -1.0
         try:
@@ -142,7 +141,6 @@ def main() -> None:
         seed_list = list(DEFAULT_SEEDS)[:num_seeds]
 
         if exp == "e1a_wiki103":
-            # Stage 1
             for seed in seed_list:
                 for m in mg.get("mlm", []):
                     log.info(f"[sweeps:e1a] Stage1 specialise {m} (seed={seed})")
@@ -151,7 +149,6 @@ def main() -> None:
                         [f"model={m}", f"+seed={seed}", *hydra_overrides],
                     )
 
-            # Stage 2 (PM)
             for seed in seed_list:
                 for m in mg.get("mlm", []):
                     ckpt = _best_ready_ckpt(paths, m)
@@ -160,7 +157,7 @@ def main() -> None:
                         args = [
                             f"model={m}",
                             f"+seed={seed}",
-                            f"+model_ckpt={ckpt}",  # append for Hydra
+                            f"+model_ckpt={ckpt}",
                             "+dump_recon=true",
                             *hydra_overrides,
                         ]
@@ -174,7 +171,6 @@ def main() -> None:
                         ]
                     _run_module("lldc.scripts.stage2_compress_pm", args)
 
-            # Stage 2 (VQ)
             for seed in seed_list:
                 for m in mg.get("ar", []):
                     log.info(f"[sweeps:e1a] Stage2 VQ {m} (seed={seed})")
@@ -201,23 +197,22 @@ def main() -> None:
                         log.info(
                             f"[sweeps:e2a] Prune & recover {m} at level={lvl} (seed={seed})"
                         )
-                        # NOTE: use '+prune_level=' to append unknown key in Hydra
                         _run_module(
                             "lldc.scripts.prune_and_recover",
                             [
                                 f"model={m}",
-                                f"+prune_level={lvl}",  # <-- FIXED: append, not override
+                                f"+prune_level={lvl}",
                                 f"+seed={seed}",
                                 *hydra_overrides,
                             ],
                         )
-                        ckpt = f"artifacts/checkpoints/{m}_pruned_{lvl}"
+                        ckpt = f"artifacts/checkpoints/{exp}/{m}_pruned_{lvl}_seed{seed}"
                         if arch == "mlm":
                             _run_module(
                                 "lldc.scripts.stage2_compress_pm",
                                 [
                                     f"model={m}",
-                                    f"+model_ckpt={ckpt}",  # append is correct
+                                    f"+model_ckpt={ckpt}",
                                     "+dump_recon=true",
                                     f"+seed={seed}",
                                     *hydra_overrides,
@@ -228,7 +223,7 @@ def main() -> None:
                                 "lldc.scripts.stage2_compress_vq",
                                 [
                                     f"model={m}",
-                                    f"+model_ckpt={ckpt}",  # append is correct
+                                    f"+model_ckpt={ckpt}",
                                     "+dump_recon=true",
                                     f"+seed={seed}",
                                     *hydra_overrides,

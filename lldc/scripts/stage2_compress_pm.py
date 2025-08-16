@@ -1,21 +1,28 @@
 # lldc/scripts/stage2_compress_pm.py
 
 from __future__ import annotations
+
 from typing import Any, List, Tuple
+
 import json
 import math
 import time
 from pathlib import Path
 import re
+import os
 
 import hydra
+from tqdm.auto import tqdm
+
 import torch
 import torch.nn.functional as F
+
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
 
 from lldc.utils.paths import Paths
 from lldc.utils.logging import setup_logging
+
 from lldc.compression.predictive_masking import pll_surprisal_scores
 from lldc.compression.masking_policies import choose_mask
 from lldc.compression.payload_codec import arithmetic as ac
@@ -53,8 +60,9 @@ def _position_codec(flags: List[bool]) -> Tuple[str, bytes, int]:
         return "bitmask", payload, bm.cost_bits(n)
 
 
-
 _PRUNED_PAT = re.compile(r"_pruned_([0-9]+(?:\.[0-9]+)?)$")
+_SEEDED_PAT = re.compile(r"_seed(\d+)$")
+
 
 def _parse_prune_level(p: Path) -> float:
     m = _PRUNED_PAT.search(p.name)
@@ -74,10 +82,10 @@ def _is_valid_hf_dir(d: Path) -> bool:
     return has_cfg and has_weights
 
 
-def _find_best_local_ckpt(model_name: str, paths: Paths) -> Path | None:
+def _find_best_local_ckpt(model_name: str, paths: Paths, prefer_exp: str | None = None) -> Path | None:
     root = paths.checkpoints
-    cands: list[tuple[float, float, Path]] = []
-    for p in root.glob(f"{model_name}_pruned_*"):
+    cands: list[tuple[int, float, float, Path]] = []  
+    for p in root.rglob(f"{model_name}_pruned_*"):
         if not p.is_dir():
             continue
         if not (p / "READY").exists():
@@ -89,11 +97,12 @@ def _find_best_local_ckpt(model_name: str, paths: Paths) -> Path | None:
             mtime = p.stat().st_mtime
         except Exception:
             mtime = 0.0
-        cands.append((level, mtime, p))
+        prefer = 1 if (prefer_exp and p.parent.name == prefer_exp) else 0
+        cands.append((prefer, float(level), float(mtime), p))
     if not cands:
         return None
-    cands.sort(key=lambda t: (t[0], t[1]), reverse=True)
-    return cands[0][2]
+    cands.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)
+    return cands[0][3]
 
 
 def _resolve_model_source(cfg: Any, model_name: str, paths: Paths, log) -> str:
@@ -104,17 +113,17 @@ def _resolve_model_source(cfg: Any, model_name: str, paths: Paths, log) -> str:
             log.info(f"[stage2_pm] Using explicit checkpoint: {p}")
             return str(p)
         else:
-            log.warning(f"[stage2_pm] Ignoring invalid model_ckpt '{explicit}' (missing config/weights).")
-
+            log.warning(
+                f"[stage2_pm] Ignoring invalid model_ckpt '{explicit}' (missing config/weights)."
+            )
+    exp_name = str(getattr(getattr(cfg, "experiment", None), "name", ""))
     if bool(_cfg_get(cfg, "e2a.stage2_reuse", True)):
-        best = _find_best_local_ckpt(model_name, paths)
+        best = _find_best_local_ckpt(model_name, paths, prefer_exp=exp_name or None)
         if best is not None:
             log.info(f"[stage2_pm] Reusing local checkpoint: {best}")
             return str(best)
-
     log.info(f"[stage2_pm] Falling back to hub model: {model_name}")
     return model_name
-
 
 
 def _reconstruct_beam(
@@ -124,9 +133,11 @@ def _reconstruct_beam(
     mask_id = tok.mask_token_id
     if mask_id is None:
         raise RuntimeError("Tokenizer must define a [MASK] token.")
+
     ids = input_ids.clone().to(device)
     masked = ids.clone()
     masked[~keep_flags] = int(mask_id)
+
     positions = torch.nonzero(~keep_flags, as_tuple=False).flatten().tolist()
     if not positions:
         return tok.decode(ids, skip_special_tokens=True)
@@ -141,6 +152,7 @@ def _reconstruct_beam(
             vocab_size = mlm.get_output_embeddings().num_embeddings
         except Exception:
             vocab_size = len(tok)
+
     banned_bias = torch.zeros(int(vocab_size), device=device)
     if bad_ids.numel() > 0:
         banned_bias[bad_ids] = float("-inf")
@@ -152,6 +164,7 @@ def _reconstruct_beam(
         return (seq_2d != pad_id).long()
 
     beams: List[Tuple[torch.LongTensor, float]] = [(masked.unsqueeze(0), 0.0)]
+
     with torch.inference_mode():
         for pos in positions:
             batch = torch.cat([seq for (seq, _) in beams], dim=0)
@@ -171,10 +184,7 @@ def _reconstruct_beam(
                     sc = base_score + float(lp)
                     if (key not in candidates) or (sc > candidates[key][1]):
                         candidates[key] = (s2, sc)
-
-            beams = sorted(candidates.values(), key=lambda x: x[1], reverse=True)[
-                :beam_width
-            ]
+            beams = sorted(candidates.values(), key=lambda x: x[1], reverse=True)[:beam_width]
 
         if len(beams) > 1:
             final_batch = torch.cat([seq for (seq, _) in beams], dim=0)
@@ -202,40 +212,62 @@ def _reconstruct_nucleus(
     mask_id = tok.mask_token_id
     if mask_id is None:
         raise RuntimeError("Tokenizer must define a [MASK] token.")
+
     ids = input_ids.clone().to(device)
     masked = ids.clone()
     masked[~keep_flags] = int(mask_id)
+
     positions = torch.nonzero(~keep_flags, as_tuple=False).flatten().tolist()
     if not positions:
         return tok.decode(ids, skip_special_tokens=True)
 
     seq = masked.unsqueeze(0)
-    for pos in positions:
-        out = mlm(input_ids=seq).logits[0, pos]
-        probs = torch.softmax(out, dim=-1)
-        sorted_probs, sorted_idx = torch.sort(probs, descending=True)
-        cumsum = torch.cumsum(sorted_probs, dim=-1)
-        cutoff = (cumsum > top_p).nonzero(as_tuple=False)
-        K = int(cutoff[0, 0].item()) + 1 if cutoff.numel() > 0 else probs.numel()
-        p = sorted_probs[:K] / max(1e-12, float(sorted_probs[:K].sum().item()))
-        choice = torch.multinomial(p, num_samples=1).item()
-        tid = int(sorted_idx[choice].item())
-        seq[0, pos] = tid
-
+    with torch.inference_mode():
+        for pos in positions:
+            out = mlm(input_ids=seq).logits[0, pos]
+            probs = torch.softmax(out, dim=-1)
+            sorted_probs, sorted_idx = torch.sort(probs, descending=True)
+            cumsum = torch.cumsum(sorted_probs, dim=-1)
+            cutoff = (cumsum > top_p).nonzero(as_tuple=False)
+            K = int(cutoff[0, 0].item()) + 1 if cutoff.numel() > 0 else probs.numel()
+            p = sorted_probs[:K] / max(1e-12, float(sorted_probs[:K].sum().item()))
+            choice = torch.multinomial(p, num_samples=1).item()
+            tid = int(sorted_idx[choice].item())
+            seq[0, pos] = tid
     return tok.decode(seq[0], skip_special_tokens=True)
+
+
+def _load_resume_state(recons_path: Path) -> tuple[int, int, int, int]:
+    if not recons_path.exists():
+        return 0, 0, 0, 0
+    n, tbits, pbits, chars = 0, 0, 0, 0
+    with recons_path.open("r", encoding="utf-8") as f:
+        for ln in f:
+            try:
+                j = json.loads(ln)
+            except Exception:
+                continue
+            n += 1
+            tbits += int(j.get("token_bits", 0) or 0)
+            pbits += int(j.get("position_bits", 0) or 0)
+            chars += int(j.get("orig_chars", 0) or 0)
+    return n, tbits, pbits, chars
 
 
 @hydra.main(config_path="../../configs", config_name="defaults", version_base=None)
 def main(cfg: Any) -> None:
     log = setup_logging()
     paths = Paths().ensure()
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     oracle_name = _cfg_get(cfg, "stage2.pm.arithmetic_coder.oracle_model", "gpt2-xl")
     mlm_name = cfg.model.pretrained_name
+    exp_name = str(getattr(getattr(cfg, "experiment", None), "name", ""))
     model_source = _resolve_model_source(cfg, mlm_name, paths, log)
     source_path = Path(model_source)
     tok_load_id = model_source if source_path.exists() else mlm_name
+
     tok_mlm = AutoTokenizer.from_pretrained(tok_load_id)
     if tok_mlm.pad_token is None and tok_mlm.eos_token:
         tok_mlm.pad_token = tok_mlm.eos_token
@@ -250,7 +282,18 @@ def main(cfg: Any) -> None:
     split_map = cfg.data.source.split_map
     text_field = cfg.data.processing.text_field
     test_split = ds[split_map.test]
-    max_eval = int(_cfg_get(cfg, "data.limits.max_eval_samples", 10000) or 10000)
+    max_eval_cfg = _cfg_get(cfg, "data.limits.max_eval_samples", None)
+    max_docs_override = _cfg_get(cfg, "stage2.pm.max_docs", None)
+    fast_dev_run = bool(_cfg_get(cfg, "fast_dev_run", False) or _cfg_get(cfg, "smoke_test", False))
+    if fast_dev_run and max_docs_override is None:
+        max_docs_override = 100  
+
+    if max_docs_override is not None:
+        max_eval = int(max_docs_override)
+    elif max_eval_cfg is None:
+        max_eval = 1000
+    else:
+        max_eval = int(max_eval_cfg)
     test_split = test_split.select(range(min(max_eval, len(test_split))))
 
     keep_fraction = float(_cfg_get(cfg, "stage2.pm.keep_fraction", 0.4))
@@ -260,113 +303,161 @@ def main(cfg: Any) -> None:
     dec_method = str(getattr(dec_cfg, "method", "greedy")).lower()
     beam_width = int(getattr(dec_cfg, "beam_width", 4))
     top_p = float(getattr(dec_cfg, "top_p", 0.9))
-
+    src_tag = Path(model_source).name.replace("/", "-")
+    exp_tag = str(getattr(getattr(cfg, "experiment", None), "name", "") or "")
+    prefix = (exp_tag + "__") if exp_tag else ""
     tag_mask = f"mask{keep_fraction:.2f}"
-    payload_dir = paths.payloads / f"pm_{mlm_name.replace('/', '-')}_{tag_mask}"
+    payload_dir = paths.payloads / f"pm_{prefix}{src_tag}_{tag_mask}"
     payload_dir.mkdir(parents=True, exist_ok=True)
     recons_path = payload_dir / "recons.jsonl"
-
-    n_docs = 0
-    total_token_bits = 0
-    total_position_bits = 0
-    total_chars = 0
-
-    with recons_path.open("w", encoding="utf-8") as fout:
-        for ex in test_split:
-            text = (ex.get(text_field) or "").strip()
-            if not text:
-                continue
-
-            ids = tok_mlm(
-                text,
-                return_tensors="pt",
-                truncation=True,
-                max_length=cfg.data.processing.max_length,
-                add_special_tokens=False,
-            )["input_ids"][0].to(device)
-            if ids.numel() == 0:
-                continue
-
-            s_bits = pll_surprisal_scores(ids, mlm, tok_mlm, tok_mlm.mask_token_id)
-            keep_flags_t = choose_mask(policy, s_bits, keep_fraction=keep_fraction)
-            keep_flags = keep_flags_t.tolist()
-
-            pos_codec, pos_payload, pos_bits = _position_codec(keep_flags)
-            total_position_bits += pos_bits
-
-            spans = kept_char_spans_from_offsets(tok_mlm, text, keep_flags)
-            kept_oracle_ids = select_oracle_token_ids_from_spans(
-                oracle_tok, text, spans
+    resume_enabled = bool(_cfg_get(cfg, "stage2.pm.resume", True))
+    n_done_existing, token_bits_existing, pos_bits_existing, chars_existing = (0, 0, 0, 0)
+    file_mode = "w"
+    if resume_enabled and recons_path.exists():
+        n_done_existing, token_bits_existing, pos_bits_existing, chars_existing = _load_resume_state(
+            recons_path
+        )
+        if n_done_existing > 0:
+            log.info(
+                f"[stage2_pm] Resuming: found {n_done_existing} docs already in {recons_path} "
+                f"(token_bits={token_bits_existing}, position_bits={pos_bits_existing}, chars={chars_existing})"
             )
+            file_mode = "a"
 
-            token_bits = 0
-            kept_tokens = len(kept_oracle_ids)
-            if kept_oracle_ids:
-                syms, probs_list, _ = encode_kept_stream_with_oracle(
-                    kept_text=oracle_tok.decode(
-                        kept_oracle_ids, skip_special_tokens=True
-                    ),
-                    oracle_tok=oracle_tok,
-                    oracle_model=oracle_model,
-                )
-                try:
-                    token_payload = ac.encode_with_probs(syms, probs_list)
-                    token_bits = ac.payload_num_bits(token_payload)
-                except Exception:
-                    eps = 1e-12
-                    xb = 0.0
-                    for sym, pvec in zip(syms, probs_list):
-                        pr = float(pvec[sym]) if 0 <= sym < len(pvec) else 0.0
-                        xb += -math.log2(max(pr, eps))
-                    token_bits = int(round(xb))
-            total_token_bits += token_bits
+    n_docs = int(n_done_existing)
+    total_token_bits = int(token_bits_existing)
+    total_position_bits = int(pos_bits_existing)
+    total_chars = int(chars_existing)
 
-            t0 = time.perf_counter()
-            if pos_codec == "rle_elias":
-                _ = rle.decode_rle_elias(pos_payload, ids.numel())
-            else:
-                _ = bm.unpack_bitmask(pos_payload, ids.numel())
-            if kept_oracle_ids:
-                try:
-                    _ = ac.decode_with_probs(token_payload, probs_list)
-                except Exception:
-                    pass
-            t_payload_ms = (time.perf_counter() - t0) * 1000.0
+    desc = (
+        f"PM compress ({mlm_name}, {policy}, keep={keep_fraction:.2f}, dec={dec_method})"
+        + (" [FAST]" if fast_dev_run else "")
+        + (" [RESUME]" if n_done_existing > 0 else "")
+    )
+    pbar = tqdm(total=len(test_split), desc=desc, unit="doc")
+    if n_done_existing > 0:
+        pbar.update(n_done_existing)
+        bpc_now = (total_token_bits + total_position_bits) / max(1, total_chars)
+        pbar.set_postfix(bpc=f"{bpc_now:.4f}", docs=n_docs)
 
-            t1 = time.perf_counter()
-            if dec_method == "greedy":
-                recon_text = reconstruct_mlm_text(tok_mlm, mlm, ids, keep_flags_t)
-            elif dec_method == "beam":
-                recon_text = _reconstruct_beam(
-                    tok_mlm, mlm, ids, keep_flags_t, beam_width=beam_width
-                )
-            elif dec_method == "nucleus":
-                recon_text = _reconstruct_nucleus(
-                    tok_mlm, mlm, ids, keep_flags_t, top_p=top_p
-                )
-            else:
-                recon_text = reconstruct_mlm_text(tok_mlm, mlm, ids, keep_flags_t)
-            t_mlm_ms = (time.perf_counter() - t1) * 1000.0
+    try:
+        with recons_path.open(file_mode, encoding="utf-8") as fout, torch.inference_mode():
+            for i, ex in enumerate(test_split):
+                if i < n_done_existing:
+                    continue
 
-            cpu_decode_ms = t_payload_ms + t_mlm_ms
-            charF = character_level_fidelity(text, recon_text)
+                text = (ex.get(text_field) or "").strip()
+                if not text:
+                    pbar.update(1)
+                    continue
 
-            doc = {
-                "original": text,
-                "reconstruction": recon_text,
-                "orig_chars": len(text),
-                "kept_tokens": int(kept_tokens),
-                "token_bits": int(token_bits),
-                "position_bits": int(pos_bits),
-                "cpu_decode_ms": float(cpu_decode_ms),
-                "char_fidelity": float(charF),
-                "decoding_method": dec_method,
-            }
-            fout.write(json.dumps(doc) + "\n")
+                ids = tok_mlm(
+                    text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=cfg.data.processing.max_length,
+                    add_special_tokens=False,
+                )["input_ids"][0].to(device)
+                if ids.numel() == 0:
+                    pbar.update(1)
+                    continue
+                s_bits = pll_surprisal_scores(ids, mlm, tok_mlm, tok_mlm.mask_token_id)
+                keep_flags_t = choose_mask(policy, s_bits, keep_fraction=keep_fraction)
+                keep_flags = keep_flags_t.tolist()
+                pos_codec, pos_payload, pos_bits = _position_codec(keep_flags)
+                total_position_bits += pos_bits
+                spans = kept_char_spans_from_offsets(tok_mlm, text, keep_flags)
+                kept_oracle_ids = select_oracle_token_ids_from_spans(oracle_tok, text, spans)
 
-            total_chars += len(text)
-            n_docs += 1
+                token_bits = 0
+                kept_tokens = len(kept_oracle_ids)
+                token_payload = None
+                probs_list = None
 
+                if kept_oracle_ids:
+                    syms, probs_list, _ = encode_kept_stream_with_oracle(
+                        kept_text=oracle_tok.decode(kept_oracle_ids, skip_special_tokens=True),
+                        oracle_tok=oracle_tok,
+                        oracle_model=oracle_model,
+                    )
+                    try:
+                        token_payload = ac.encode_with_probs(syms, probs_list)
+                        token_bits = ac.payload_num_bits(token_payload)
+                    except Exception:
+                        eps = 1e-12
+                        xb = 0.0
+                        for sym, pvec in zip(syms, probs_list):
+                            pr = float(pvec[sym]) if 0 <= sym < len(pvec) else 0.0
+                            xb += -math.log2(max(pr, eps))
+                        token_bits = int(round(xb))
+
+                total_token_bits += token_bits
+                t0 = time.perf_counter()
+                if pos_codec == "rle_elias":
+                    _ = rle.decode_rle_elias(pos_payload, ids.numel())
+                else:
+                    _ = bm.unpack_bitmask(pos_payload, ids.numel())
+                if kept_oracle_ids and token_payload is not None and probs_list is not None:
+                    try:
+                        _ = ac.decode_with_probs(token_payload, probs_list)
+                    except Exception:
+                        pass
+                t_payload_ms = (time.perf_counter() - t0) * 1000.0
+
+                t1 = time.perf_counter()
+                if dec_method == "greedy":
+                    recon_text = reconstruct_mlm_text(tok_mlm, mlm, ids, keep_flags_t)
+                elif dec_method == "beam":
+                    recon_text = _reconstruct_beam(tok_mlm, mlm, ids, keep_flags_t, beam_width=beam_width)
+                elif dec_method == "nucleus":
+                    recon_text = _reconstruct_nucleus(tok_mlm, mlm, ids, keep_flags_t, top_p=top_p)
+                else:
+                    recon_text = reconstruct_mlm_text(tok_mlm, mlm, ids, keep_flags_t)
+                t_mlm_ms = (time.perf_counter() - t1) * 1000.0
+
+                cpu_decode_ms = t_payload_ms + t_mlm_ms
+                charF = character_level_fidelity(text, recon_text)
+
+                doc = {
+                    "original": text,
+                    "reconstruction": recon_text,
+                    "orig_chars": len(text),
+                    "kept_tokens": int(kept_tokens),
+                    "token_bits": int(token_bits),
+                    "position_bits": int(pos_bits),
+                    "cpu_decode_ms": float(cpu_decode_ms),
+                    "char_fidelity": float(charF),
+                    "decoding_method": dec_method,
+                }
+                fout.write(json.dumps(doc) + "\n")
+
+                total_chars += len(text)
+                n_docs += 1
+                bpc_now = (total_token_bits + total_position_bits) / max(1, total_chars)
+                pbar.set_postfix(bpc=f"{bpc_now:.4f}", docs=n_docs)
+                pbar.update(1)
+
+    except KeyboardInterrupt:
+        bpc_partial = (total_token_bits + total_position_bits) / max(1, total_chars)
+        summary = {
+            "method": "PM",
+            "model": mlm_name,
+            "mask_rate": keep_fraction,
+            "n_docs": int(n_docs),
+            "total_token_bits": int(total_token_bits),
+            "total_position_bits": int(total_position_bits),
+            "total_chars": int(total_chars),
+            "bpc": bpc_partial,
+            "interrupted": True,
+            "notes": "Run interrupted by user (Ctrl-C). Summary reflects partial results. Resume is supported.",
+        }
+        (payload_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+        log.info(
+            f"[stage2_pm] Interrupted — partial summary written. bpc={bpc_partial:.6f} docs={n_docs}"
+        )
+        raise
+    finally:
+        pbar.close()
     summary = {
         "method": "PM",
         "model": mlm_name,

@@ -7,15 +7,7 @@ import hydra
 import torch
 import inspect
 from datasets import load_dataset
-from transformers import (
-    AutoTokenizer,
-    AutoModelForMaskedLM,
-    AutoModelForCausalLM,
-    DataCollatorForLanguageModeling,
-    Trainer,
-    TrainingArguments,
-)
-
+from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM, DataCollatorForLanguageModeling, Trainer, TrainingArguments
 from lldc.utils.logging import setup_logging
 from lldc.utils.hydra_utils import resolve_auto
 from lldc.utils.determinism import set_determinism
@@ -33,6 +25,18 @@ def _cfg_get(cfg: Any, dotted: str, default=None):
         else:
             cur = getattr(cur, key, None)
     return default if cur is None else cur
+
+
+def _is_valid_hf_dir(p: Path) -> bool:
+    try:
+        if not p.exists() or not p.is_dir():
+            return False
+        has_ready = (p / "READY").exists()
+        has_cfg = (p / "config.json").exists()
+        has_weights = (p / "model.safetensors").exists() or (p / "pytorch_model.bin").exists()
+        return has_ready and has_cfg and has_weights
+    except Exception:
+        return False
 
 
 def _cfg_arch(cfg: Any) -> str:
@@ -82,10 +86,20 @@ def main(cfg: Any) -> None:
     paths = Paths().ensure()
 
     torch.use_deterministic_algorithms(True, warn_only=False)
-    set_determinism(cfg.seed)
+    set_determinism(getattr(cfg, "seed", 13))
 
     model_name = cfg.model.pretrained_name
     arch = _cfg_arch(cfg)
+    level = _cfg_get(cfg, "prune_level", 0.0)
+    seed = getattr(cfg, "seed", None)
+    seed_suffix = f"_seed{seed}" if seed is not None else ""
+    exp_name = str(getattr(getattr(cfg, "experiment", None), "name", "default"))
+    outdir = paths.checkpoints / exp_name / f"{model_name}_pruned_{level}{seed_suffix}"
+    skip_if_ready = bool(_cfg_get(cfg, "stage1.train.skip_if_ready", True))
+    force = bool(_cfg_get(cfg, "stage1.train.force", False))
+    if skip_if_ready and not force and _is_valid_hf_dir(outdir):
+        log.info(f"[prune] READY checkpoint found — skipping Stage1 retrain: {outdir}")
+        return
 
     tok = AutoTokenizer.from_pretrained(model_name)
     if tok.pad_token is None and tok.eos_token:
@@ -99,13 +113,13 @@ def main(cfg: Any) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
-    level = _cfg_get(cfg, "prune_level", 0.0)
-
     drop_heads = bool(
         _cfg_get(
             cfg,
             "pruning.structured.drop_attention_heads",
-            _cfg_get(cfg, "experiment.pruning.structured.drop_attention_heads", True),
+            _cfg_get(
+                cfg, "experiment.pruning.structured.drop_attention_heads", True
+            ),
         )
     )
 
@@ -138,13 +152,13 @@ def main(cfg: Any) -> None:
     recovery_epochs = _cfg_get(
         cfg,
         "stage1.train.epochs",
-        _cfg_get(cfg, "experiment.stage1.train.epochs", "auto"),
+        _cfg_get(cfg, "experiment.stage1.train.epochs", 'auto'),
     )
-    if recovery_epochs == "auto":
+    if recovery_epochs == 'auto':
         recovery_epochs = 3
 
     args = _make_training_args(
-        output_dir=str(paths.checkpoints / f"{model_name}_pruned_{level}"),
+        output_dir=str(outdir),
         epochs=int(recovery_epochs),
     )
 
@@ -156,13 +170,11 @@ def main(cfg: Any) -> None:
     )
     trainer.train()
 
-    outdir = paths.checkpoints / f"{model_name}_pruned_{level}"
     outdir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(outdir)
     tok.save_pretrained(outdir)
     (outdir / "READY").write_text("ok\n")
     log.info(f"[prune] Saved pruned+recovered checkpoint → {outdir}")
-
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,11 @@
+{
+  "method": "PM",
+  "model": "roberta-base",
+  "mask_rate": 0.4,
+  "n_docs": 199,
+  "total_token_bits": 94124,
+  "total_position_bits": 21776,
+  "total_chars": 90395,
+  "bpc": 1.2821505614248576,
+  "notes": "cpu_decode_ms includes payload decode + MLM forward time; decoding strategies supported (greedy/beam/nucleus)."
+}

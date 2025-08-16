@@ -1,0 +1,12 @@
+{
+  "method": "PM",
+  "model": "bert-base-cased",
+  "mask_rate": 0.4,
+  "n_docs": 169,
+  "total_token_bits": 72619,
+  "total_position_bits": 16312,
+  "total_chars": 69446,
+  "bpc": 1.2805777150591826,
+  "interrupted": true,
+  "notes": "Run interrupted by user (Ctrl-C). Summary reflects partial results. Resume is supported."
+}
